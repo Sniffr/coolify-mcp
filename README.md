@@ -54,6 +54,61 @@ For a long-running hosted deployment, use a private MCP gateway or a platform th
 
 ## 🟣 Claude Code
 
+## ✨ One-command Claude Code install
+
+Claude Code has a built-in MCP CLI: `claude mcp add`. This installer downloads the server, creates a private environment file, and registers a **user-scoped stdio MCP server**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Sniffr/coolify-mcp/main/install-claude-code.sh | bash
+```
+
+The installer creates:
+
+```text
+~/.local/share/coolify-mcp/coolify_mcp_server.py
+~/.local/share/coolify-mcp/run.sh
+~/.config/coolify-mcp/env       # mode 600
+```
+
+Edit the environment file:
+
+```bash
+${EDITOR:-nano} ~/.config/coolify-mcp/env
+```
+
+Set:
+
+```dotenv
+COOLIFY_URL=https://your-coolify.example.com
+COOLIFY_TOKEN=your-complete-coolify-token
+```
+
+Then restart Claude Code and verify:
+
+```bash
+claude mcp list
+claude mcp get coolify
+```
+
+The installer uses the official Claude Code command form `claude mcp add --transport stdio --scope user`. To install only for the current project, change `--scope user` to `--scope project` in the downloaded installer or run the equivalent command manually.
+
+> ⚠️ Piped shell installers are convenient but require trust. For maximum reviewability, download first, inspect, then execute:
+>
+> ```bash
+> curl -fsSLO https://raw.githubusercontent.com/Sniffr/coolify-mcp/main/install-claude-code.sh
+> less install-claude-code.sh
+> bash install-claude-code.sh
+> ```
+
+### Where should the environment variables live?
+
+For this installer, use `~/.config/coolify-mcp/env` with permissions `600`. It is loaded only by the local MCP launcher and is not sent to the LLM. Alternatives are an OS secret manager, a systemd credential, a Docker/Kubernetes secret, or Claude Code’s supported MCP environment configuration. Never put the real token in `.mcp.json`, a prompt, source code, or GitHub.
+
+## 🧰 MCP harness / tool
+
+The MCP server is the harness: Claude Code starts it as a child process and calls its tools through MCP. The built-in Claude CLI is the setup tool; no extra MCP harness package is needed for local stdio use. The same server can be registered manually with OpenHands or OpenCode using their local MCP command configuration.
+
+
 Add this to the MCP configuration used by Claude Code (project `.mcp.json` or user configuration):
 
 ```json
