@@ -1,4 +1,4 @@
-//! Explicit endpoint contract consumed by grouped handlers.
+//! Contract for public typed resource methods.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SafetyClass {
     Read,
@@ -7,7 +7,6 @@ pub enum SafetyClass {
 }
 #[derive(Debug, Clone, Copy)]
 pub struct RouteSpec {
-    pub group: &'static str,
     pub action: &'static str,
     pub method: &'static str,
     pub path: &'static str,
@@ -17,9 +16,8 @@ pub struct RouteSpec {
     pub compatibility: &'static str,
 }
 macro_rules! r {
-    ($g:literal,$a:literal,$m:literal,$p:literal,$args:expr,$proj:literal,$s:ident,$c:literal) => {
+    ($a:literal,$m:literal,$p:literal,$args:expr,$proj:literal,$s:ident,$c:literal) => {
         RouteSpec {
-            group: $g,
             action: $a,
             method: $m,
             path: $p,
@@ -32,7 +30,6 @@ macro_rules! r {
 }
 pub const ROUTE_MATRIX: &[RouteSpec] = &[
     r!(
-        "servers",
         "list_servers",
         "GET",
         "/servers",
@@ -42,7 +39,6 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "servers",
         "get_server",
         "GET",
         "/servers/{uuid}",
@@ -52,27 +48,6 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "servers",
-        "server_resources",
-        "GET",
-        "/servers/{uuid}/resources",
-        &["uuid"],
-        "ServerResourceSummary[]",
-        Read,
-        "none"
-    ),
-    r!(
-        "servers",
-        "server_domains",
-        "GET",
-        "/servers/{uuid}/domains",
-        &["uuid"],
-        "DomainSummary[]",
-        Read,
-        "none"
-    ),
-    r!(
-        "servers",
         "validate_server",
         "POST",
         "/servers/{uuid}/validate",
@@ -82,18 +57,7 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "POST->GET on 405/routing 404"
     ),
     r!(
-        "servers",
-        "list_destinations",
-        "GET",
-        "/destinations",
-        &[],
-        "DestinationSummary[]",
-        Read,
-        "none"
-    ),
-    r!(
-        "projects",
-        "projects_list",
+        "list_projects",
         "GET",
         "/projects",
         &[],
@@ -102,8 +66,7 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "projects",
-        "project_get",
+        "get_project",
         "GET",
         "/projects/{uuid}",
         &["uuid"],
@@ -112,8 +75,7 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "projects",
-        "project_create",
+        "create_project",
         "POST",
         "/projects",
         &[],
@@ -122,8 +84,7 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "projects",
-        "project_update",
+        "update_project",
         "PATCH",
         "/projects/{uuid}",
         &["uuid"],
@@ -132,8 +93,7 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "projects",
-        "project_delete",
+        "delete_project",
         "DELETE",
         "/projects/{uuid}",
         &["uuid"],
@@ -142,57 +102,15 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "projects",
-        "project_environments_list",
+        "project_environments",
         "GET",
-        "/projects/{project_uuid}/environments",
-        &["project_uuid"],
+        "/projects/{uuid}/environments",
+        &["uuid"],
         "EnvironmentSummary[]",
         Read,
         "none"
     ),
     r!(
-        "projects",
-        "project_environment_create",
-        "POST",
-        "/projects/{project_uuid}/environments",
-        &["project_uuid"],
-        "EnvironmentSummary",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "projects",
-        "project_environment_delete",
-        "DELETE",
-        "/projects/{project_uuid}/environments/{name}",
-        &["project_uuid", "name"],
-        "ActionResult",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "projects",
-        "project_scheduled_tasks_list",
-        "GET",
-        "/projects/{project_uuid}/scheduled-tasks",
-        &["project_uuid"],
-        "ScheduledTaskSummary[]",
-        Read,
-        "none"
-    ),
-    r!(
-        "projects",
-        "project_scheduled_task_create",
-        "POST",
-        "/projects/{project_uuid}/scheduled-tasks",
-        &["project_uuid"],
-        "ScheduledTaskSummary",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "applications",
         "list_applications",
         "GET",
         "/applications",
@@ -202,7 +120,6 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "applications",
         "get_application",
         "GET",
         "/applications/{uuid}",
@@ -212,28 +129,25 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "applications",
-        "application_create",
+        "create_application",
         "POST",
         "/applications/{kind}",
         &["kind"],
-        "ApplicationSummary",
+        "ActionResult",
         Destructive,
         "none"
     ),
     r!(
-        "applications",
-        "application_update",
+        "update_application",
         "PATCH",
         "/applications/{uuid}",
         &["uuid"],
-        "ApplicationSummary",
+        "ActionResult",
         Destructive,
         "none"
     ),
     r!(
-        "applications",
-        "application_delete",
+        "delete_application",
         "DELETE",
         "/applications/{uuid}",
         &["uuid"],
@@ -242,187 +156,51 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "applications",
-        "application_env_list",
+        "application_envs",
         "GET",
-        "/applications/{uuid}/envs",
-        &["uuid"],
-        "EnvironmentVariable[]",
-        Read,
-        "none"
-    ),
-    r!(
-        "applications",
-        "application_env_create",
-        "POST",
-        "/applications/{uuid}/envs",
-        &["uuid"],
-        "EnvironmentVariable",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "applications",
-        "application_env_update",
-        "PATCH",
-        "/applications/{uuid}/envs/{env_uuid}",
+        "/applications/{uuid}/envs[/{env_uuid}]",
         &["uuid", "env_uuid"],
-        "EnvironmentVariable",
+        "EnvironmentVariable[]/ActionResult",
         Destructive,
         "none"
     ),
     r!(
-        "applications",
-        "application_env_delete",
-        "DELETE",
-        "/applications/{uuid}/envs/{env_uuid}",
-        &["uuid", "env_uuid"],
+        "application_action",
+        "POST",
+        "/applications/{uuid}/{action}",
+        &["uuid", "action"],
         "ActionResult",
         Destructive,
         "none"
     ),
     r!(
-        "applications",
-        "application_logs",
+        "application_storage",
         "GET",
-        "/applications/{uuid}/logs",
-        &["uuid"],
-        "BoundedLogs",
-        Read,
-        "none"
-    ),
-    r!(
-        "applications",
-        "application_start",
-        "POST",
-        "/applications/{uuid}/start",
-        &["uuid"],
-        "ActionResult",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "applications",
-        "application_stop",
-        "POST",
-        "/applications/{uuid}/stop",
-        &["uuid"],
-        "ActionResult",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "applications",
-        "application_restart",
-        "POST",
-        "/applications/{uuid}/restart",
-        &["uuid"],
-        "ActionResult",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "applications",
-        "application_move",
-        "POST",
-        "/applications/{uuid}/move",
-        &["uuid"],
-        "ActionResult",
-        Destructive,
-        "v4.2+ route"
-    ),
-    r!(
-        "applications",
-        "application_migrate",
-        "POST",
-        "/applications/{uuid}/migrate",
-        &["uuid"],
-        "ActionResult",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "applications",
-        "application_rollback",
-        "POST",
-        "/applications/{uuid}/rollback",
-        &["uuid"],
-        "ActionResult",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "applications",
-        "application_preview_delete",
-        "DELETE",
-        "/applications/{uuid}/previews/{pull_request_id}",
-        &["uuid", "pull_request_id"],
-        "ActionResult",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "applications",
-        "application_storage_list",
-        "GET",
-        "/applications/{uuid}/storages",
-        &["uuid"],
-        "StorageSummary[]",
-        Read,
-        "none"
-    ),
-    r!(
-        "applications",
-        "application_storage_create",
-        "POST",
-        "/applications/{uuid}/storages",
-        &["uuid"],
-        "StorageSummary",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "applications",
-        "application_storage_delete",
-        "DELETE",
-        "/applications/{uuid}/storages/{storage_uuid}",
+        "/applications/{uuid}/storages[/{storage_uuid}]",
         &["uuid", "storage_uuid"],
         "ActionResult",
         Destructive,
         "none"
     ),
     r!(
-        "applications",
-        "application_tag_list",
+        "application_tags",
         "GET",
-        "/applications/{uuid}/tags",
-        &["uuid"],
-        "TagSummary[]",
-        Read,
-        "none"
-    ),
-    r!(
-        "applications",
-        "application_tag_add",
-        "POST",
-        "/applications/{uuid}/tags",
-        &["uuid"],
-        "TagSummary",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "applications",
-        "application_tag_delete",
-        "DELETE",
-        "/applications/{uuid}/tags/{tag_uuid}",
+        "/applications/{uuid}/tags[/{tag_uuid}]",
         &["uuid", "tag_uuid"],
         "ActionResult",
         Destructive,
         "none"
     ),
     r!(
-        "databases",
+        "application_logs",
+        "GET",
+        "/applications/{uuid}/logs",
+        &["uuid"],
+        "String",
+        Read,
+        "none"
+    ),
+    r!(
         "list_databases",
         "GET",
         "/databases",
@@ -432,7 +210,6 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "databases",
         "get_database",
         "GET",
         "/databases/{uuid}",
@@ -442,107 +219,33 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "databases",
-        "database_create",
+        "create_database",
         "POST",
-        "/databases/{type}",
-        &["type"],
-        "DatabaseSummary",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "databases",
-        "database_update",
-        "PATCH",
-        "/databases/{uuid}",
-        &["uuid"],
-        "DatabaseSummary",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "databases",
-        "database_delete",
-        "DELETE",
-        "/databases/{uuid}",
-        &["uuid"],
+        "/databases/{kind}",
+        &["kind"],
         "ActionResult",
         Destructive,
         "none"
     ),
     r!(
-        "databases",
-        "database_env_list",
+        "database_action",
         "GET",
-        "/databases/{uuid}/envs",
-        &["uuid"],
-        "EnvironmentVariable[]",
-        Read,
-        "none"
-    ),
-    r!(
-        "databases",
-        "database_backup_list",
-        "GET",
-        "/databases/{uuid}/backups",
-        &["uuid"],
-        "BackupSummary[]",
-        Read,
-        "none"
-    ),
-    r!(
-        "databases",
-        "database_backup_create",
-        "POST",
-        "/databases/{uuid}/backups",
-        &["uuid"],
-        "BackupSummary",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "databases",
-        "database_backup_delete",
-        "DELETE",
-        "/databases/{uuid}/backups/{backup_uuid}",
-        &["uuid", "backup_uuid"],
+        "/databases/{uuid}/{action}",
+        &["uuid", "action"],
         "ActionResult",
         Destructive,
         "none"
     ),
     r!(
-        "databases",
         "database_logs",
         "GET",
         "/databases/{uuid}/logs",
         &["uuid"],
-        "BoundedLogs",
+        "String",
         Read,
         "none"
     ),
     r!(
-        "databases",
-        "database_storage_list",
-        "GET",
-        "/databases/{uuid}/storages",
-        &["uuid"],
-        "StorageSummary[]",
-        Read,
-        "none"
-    ),
-    r!(
-        "databases",
-        "database_tag_list",
-        "GET",
-        "/databases/{uuid}/tags",
-        &["uuid"],
-        "TagSummary[]",
-        Read,
-        "none"
-    ),
-    r!(
-        "services",
         "list_services",
         "GET",
         "/services",
@@ -552,7 +255,6 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "services",
         "get_service",
         "GET",
         "/services/{uuid}",
@@ -562,8 +264,7 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "services",
-        "service_create",
+        "create_service",
         "POST",
         "/services",
         &[],
@@ -572,67 +273,15 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "services",
-        "service_update",
-        "PATCH",
-        "/services/{uuid}",
-        &["uuid"],
-        "ServiceSummary",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "services",
-        "service_delete",
-        "DELETE",
-        "/services/{uuid}",
-        &["uuid"],
+        "service_action",
+        "GET",
+        "/services/{uuid}/{action}",
+        &["uuid", "action"],
         "ActionResult",
         Destructive,
         "none"
     ),
     r!(
-        "services",
-        "service_children",
-        "GET",
-        "/services/{uuid}/applications",
-        &["uuid"],
-        "ActionResult",
-        Read,
-        "v4.2+ route"
-    ),
-    r!(
-        "services",
-        "service_child_action",
-        "POST",
-        "/services/{uuid}/applications/{id}/start",
-        &["uuid", "id"],
-        "ActionResult",
-        Destructive,
-        "v4.2+ route"
-    ),
-    r!(
-        "services",
-        "service_storage_list",
-        "GET",
-        "/services/{uuid}/storages",
-        &["uuid"],
-        "StorageSummary[]",
-        Read,
-        "none"
-    ),
-    r!(
-        "services",
-        "service_tag_list",
-        "GET",
-        "/services/{uuid}/tags",
-        &["uuid"],
-        "TagSummary[]",
-        Read,
-        "none"
-    ),
-    r!(
-        "deployments",
         "list_deployments",
         "GET",
         "/deployments",
@@ -642,7 +291,6 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "deployments",
         "list_application_deployments",
         "GET",
         "/deployments/applications/{uuid}",
@@ -652,28 +300,43 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "deployments",
         "get_deployment",
         "GET",
         "/deployments/{uuid}",
         &["uuid"],
-        "DeploymentProjection",
+        "DeploymentSummary",
         Read,
         "none"
     ),
     r!(
-        "deployments",
-        "deployment_trigger",
+        "deployment_logs",
+        "GET",
+        "/deployments/{uuid}/logs",
+        &["uuid"],
+        "String",
+        Read,
+        "none"
+    ),
+    r!(
+        "trigger_deployment",
         "POST",
         "/deploy",
         &[],
-        "DeploymentProjection",
+        "DeploymentSummary",
         Destructive,
         "none"
     ),
     r!(
-        "deployments",
-        "deployment_cancel",
+        "poll_deployment",
+        "GET",
+        "/deployments/{uuid}",
+        &["uuid"],
+        "DeploymentSummary",
+        Read,
+        "bounded 300s polling"
+    ),
+    r!(
+        "cancel_deployment",
         "POST",
         "/deployments/{uuid}/cancel",
         &["uuid"],
@@ -682,18 +345,16 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "deployments",
-        "deployment_logs",
+        "environment_variables",
         "GET",
-        "/deployments/{uuid}/logs",
-        &["uuid"],
-        "BoundedLogs",
+        "/{kind}/{uuid}/envs",
+        &["kind", "uuid"],
+        "EnvironmentVariable[]",
         Read,
         "none"
     ),
     r!(
-        "configuration",
-        "system_get",
+        "system",
         "GET",
         "/system",
         &[],
@@ -702,7 +363,6 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "configuration",
         "system_action",
         "POST",
         "/system/{action}",
@@ -712,68 +372,25 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "configuration",
-        "s3_list",
+        "s3_storage",
         "GET",
-        "/s3",
-        &[],
-        "S3StorageSummary[]",
-        Read,
-        "none"
-    ),
-    r!(
-        "configuration",
-        "s3_create",
-        "POST",
-        "/s3",
-        &[],
-        "S3StorageSummary",
-        Destructive,
-        "none"
-    ),
-    r!(
-        "configuration",
-        "s3_delete",
-        "DELETE",
-        "/s3/{uuid}",
+        "/s3[/{uuid}]",
         &["uuid"],
         "ActionResult",
         Destructive,
         "none"
     ),
     r!(
-        "configuration",
-        "tags_list",
+        "tags",
         "GET",
-        "/tags",
-        &[],
-        "TagSummary[]",
-        Read,
+        "/tags[/{uuid}]",
+        &["uuid"],
+        "ActionResult",
+        Destructive,
         "none"
     ),
     r!(
-        "configuration",
-        "scheduled_tasks_list",
-        "GET",
-        "/scheduled-tasks",
-        &[],
-        "ScheduledTaskSummary[]",
-        Read,
-        "500 may indicate command >255 chars"
-    ),
-    r!(
-        "configuration",
-        "scheduled_task_create",
-        "POST",
-        "/scheduled-tasks",
-        &[],
-        "ScheduledTaskSummary",
-        Destructive,
-        "500 may indicate command >255 chars"
-    ),
-    r!(
-        "diagnostics",
-        "diagnose_app",
+        "diagnose_application",
         "GET",
         "/applications/{uuid}/diagnose",
         &["uuid"],
@@ -782,7 +399,6 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "none"
     ),
     r!(
-        "diagnostics",
         "diagnose_server",
         "GET",
         "/servers/{uuid}/diagnose",
@@ -791,27 +407,7 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         Read,
         "none"
     ),
-    r!(
-        "api",
-        "enable",
-        "POST",
-        "/enable",
-        &[],
-        "ActionResult",
-        Destructive,
-        "POST->GET on 405/routing 404"
-    ),
-    r!(
-        "api",
-        "disable",
-        "POST",
-        "/disable",
-        &[],
-        "ActionResult",
-        Destructive,
-        "POST->GET on 405/routing 404"
-    ),
 ];
-pub fn routes_for(group: &str) -> impl Iterator<Item = &'static RouteSpec> {
-    ROUTE_MATRIX.iter().filter(move |r| r.group == group)
+pub fn routes_for(_group: &str) -> impl Iterator<Item = &'static RouteSpec> {
+    ROUTE_MATRIX.iter()
 }

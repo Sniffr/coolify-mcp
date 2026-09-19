@@ -121,7 +121,7 @@ async fn controller_errors_do_not_retry_mutation() {
 fn route_matrix_has_unique_explicit_contracts() {
     let mut keys = std::collections::HashSet::new();
     for route in ROUTE_MATRIX {
-        assert!(keys.insert((route.group, route.action)));
+        assert!(keys.insert(route.action));
         assert!(!route.method.contains('|'));
         assert!(!route.path.contains(" and "));
         assert!(!route.projection.is_empty());
@@ -154,7 +154,56 @@ fn route_matrix_has_unique_explicit_contracts() {
     assert!(
         ROUTE_MATRIX
             .iter()
-            .any(|r| r.action == "deployment_cancel" && r.required_args == ["uuid"])
+            .any(|r| r.action == "cancel_deployment" && r.required_args == ["uuid"])
+    );
+    const EXPECTED_ACTIONS: &[&str] = &[
+        "list_servers",
+        "get_server",
+        "validate_server",
+        "list_projects",
+        "get_project",
+        "create_project",
+        "update_project",
+        "delete_project",
+        "project_environments",
+        "list_applications",
+        "get_application",
+        "create_application",
+        "update_application",
+        "delete_application",
+        "application_envs",
+        "application_action",
+        "application_storage",
+        "application_tags",
+        "application_logs",
+        "list_databases",
+        "get_database",
+        "create_database",
+        "database_action",
+        "database_logs",
+        "list_services",
+        "get_service",
+        "create_service",
+        "service_action",
+        "list_deployments",
+        "list_application_deployments",
+        "get_deployment",
+        "deployment_logs",
+        "trigger_deployment",
+        "poll_deployment",
+        "cancel_deployment",
+        "environment_variables",
+        "system",
+        "system_action",
+        "s3_storage",
+        "tags",
+        "diagnose_application",
+        "diagnose_server",
+    ];
+    assert_eq!(ROUTE_MATRIX.len(), EXPECTED_ACTIONS.len());
+    assert_eq!(
+        ROUTE_MATRIX.iter().map(|r| r.action).collect::<Vec<_>>(),
+        EXPECTED_ACTIONS
     );
     let expected = [
         ("list_servers", "GET", "/servers", "ServerSummary[]"),
@@ -168,33 +217,23 @@ fn route_matrix_has_unique_explicit_contracts() {
             "application_logs",
             "GET",
             "/applications/{uuid}/logs",
-            "BoundedLogs",
+            "String",
         ),
+        ("database_logs", "GET", "/databases/{uuid}/logs", "String"),
         (
-            "database_logs",
+            "service_action",
             "GET",
-            "/databases/{uuid}/logs",
-            "BoundedLogs",
-        ),
-        (
-            "service_children",
-            "GET",
-            "/services/{uuid}/applications",
+            "/services/{uuid}/{action}",
             "ActionResult",
         ),
+        ("trigger_deployment", "POST", "/deploy", "DeploymentSummary"),
         (
-            "deployment_trigger",
-            "POST",
-            "/deploy",
-            "DeploymentProjection",
-        ),
-        (
-            "deployment_cancel",
+            "cancel_deployment",
             "POST",
             "/deployments/{uuid}/cancel",
             "ActionResult",
         ),
-        ("system_get", "GET", "/system", "SystemSummary"),
+        ("system", "GET", "/system", "SystemSummary"),
     ];
     for (action, method, path, projection) in expected {
         let route = ROUTE_MATRIX
