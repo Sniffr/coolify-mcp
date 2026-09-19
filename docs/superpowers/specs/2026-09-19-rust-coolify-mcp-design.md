@@ -3,7 +3,7 @@
 **Date:** 2026-09-19  
 **Repository:** `Sniffr/coolify-mcp`  
 **Reference:** `StuMason/coolify-mcp`  
-**Deployment target:** `sidney@77.90.40.213`, public endpoint `https://mcp.dpdns.org`
+**Deployment target:** `sidney@77.90.40.213`, public endpoint `https://mcp.social.dpdns.org`
 
 ## 1. Purpose and success criteria
 
@@ -13,7 +13,7 @@ Success means:
 
 - The Rust server exposes all 45 default reference tools, plus the fleet-only `list_instances` tool when fleet configuration is enabled.
 - Existing local users can continue using stdio MCP.
-- Remote clients can connect through Streamable HTTP at `https://mcp.dpdns.org/mcp` using OAuth 2.1.
+- Remote clients can connect through Streamable HTTP at `https://mcp.social.dpdns.org/mcp` using OAuth 2.1.
 - Coolify v4.0–v4.3 compatibility behavior represented by the reference is preserved and covered by tests.
 - Secrets are masked at the API boundary by default, destructive actions are policy-controlled, and audit events never contain credentials or raw responses.
 - The service is deployable as a non-root container with persistent OAuth state at `/data`.
@@ -127,11 +127,11 @@ The intended public configuration is:
 
 ```text
 MCP_TRANSPORT=http
-MCP_PUBLIC_URL=https://mcp.dpdns.org
+MCP_PUBLIC_URL=https://mcp.social.dpdns.org
 MCP_PORT=8080
 ```
 
-The actual Coolify URL and token will be injected on the host through runtime environment/secrets. DNS for `mcp.dpdns.org` must resolve to `77.90.40.213`, and the existing proxy must terminate HTTPS and forward to port `8080`. The deployment must configure a health check for `/healthz` and a persistent `/data` volume.
+The actual Coolify URL and token will be injected on the host through runtime environment/secrets. `mcp.social.dpdns.org` is the concrete host under the wildcard DNS zone `*.social.dpdns.org`; it must resolve to `77.90.40.213`, and the existing proxy must terminate HTTPS and forward to port `8080`. The deployment must configure a health check for `/healthz` and a persistent `/data` volume.
 
 No destructive Coolify operation will be issued as part of deployment validation. The first remote call will be health/discovery, followed by MCP initialization, tool listing, and a safe read-only inventory call.
 
@@ -167,7 +167,7 @@ Assert the complete default roster, schemas, annotations, prompts, resources, re
 - Complete a local OAuth PKCE flow against the container.
 - Initialize an MCP session and verify the complete tool roster.
 - Deploy to the target host.
-- Verify `https://mcp.dpdns.org/healthz` and OAuth discovery.
+- Verify `https://mcp.social.dpdns.org/healthz` and OAuth discovery.
 - Connect a real MCP client and perform a safe read-only call.
 - Confirm no token or secret appears in container logs.
 

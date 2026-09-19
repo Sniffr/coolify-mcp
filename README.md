@@ -61,7 +61,7 @@ cargo run --release
 cargo run -- doctor --json
 ```
 
-Remote mode uses Streamable HTTP at `/mcp` (the hosted service is `https://mcp.dpdns.org/mcp`) and OAuth 2.1 with PKCE. Set `MCP_TRANSPORT=http`, `MCP_PUBLIC_URL`, `MCP_PORT` (default `8080`), and mount persistent OAuth state at `/data`. `MCP_CAPABILITY_PROFILE` is `read-only`, `operations`, or `admin`; HTTP defaults to read-only. Both `COOLIFY_BASE_URL`/`COOLIFY_ACCESS_TOKEN` and the legacy `COOLIFY_URL`/`COOLIFY_TOKEN` names are accepted (new names win). Never paste a real token into Git, chat, images, or logs.
+Remote mode uses Streamable HTTP at `/mcp` (the hosted service is `https://mcp.social.dpdns.org/mcp`, a concrete host under `*.social.dpdns.org`) and OAuth 2.1 with PKCE. Set `MCP_TRANSPORT=http`, `MCP_PUBLIC_URL`, `MCP_PORT` (default `8080`), and mount persistent OAuth state at `/data`. `MCP_CAPABILITY_PROFILE` is `read-only`, `operations`, or `admin`; HTTP defaults to read-only. Both `COOLIFY_BASE_URL`/`COOLIFY_ACCESS_TOKEN` and the legacy `COOLIFY_URL`/`COOLIFY_TOKEN` names are accepted (new names win). Never paste a real token into Git, chat, images, or logs.
 
 The Python installer and `coolify_mcp_server.py` remain the fallback until Rust protocol and hosted acceptance checks are complete.
 

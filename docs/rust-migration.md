@@ -1,6 +1,6 @@
 # Rust migration and rollback
 
-The Rust runtime is the intended implementation for stdio and authenticated Streamable HTTP. It supports the compatibility aliases `COOLIFY_BASE_URL`/`COOLIFY_ACCESS_TOKEN` and `COOLIFY_URL`/`COOLIFY_TOKEN`, capability profiles, OAuth 2.1 PKCE state in `/data`, and the hosted endpoint `https://mcp.dpdns.org/mcp`.
+The Rust runtime is the intended implementation for stdio and authenticated Streamable HTTP. The hosted name is the concrete `mcp.social.dpdns.org`, served under the wildcard DNS zone `*.social.dpdns.org`. It supports the compatibility aliases `COOLIFY_BASE_URL`/`COOLIFY_ACCESS_TOKEN` and `COOLIFY_URL`/`COOLIFY_TOKEN`, capability profiles, OAuth 2.1 PKCE state in `/data`, and the hosted endpoint `https://mcp.social.dpdns.org/mcp`.
 
 Run the side-effect-free checks before a switch:
 

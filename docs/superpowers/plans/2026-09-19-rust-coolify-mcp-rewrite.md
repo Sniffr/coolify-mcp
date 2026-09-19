@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Port the reference Coolify MCP server's complete 45-tool default surface and supporting behavior to Rust, preserve local stdio compatibility, add a safe hosted Streamable HTTP/OAuth transport, and deploy it at `https://mcp.dpdns.org`.
+**Goal:** Port the reference Coolify MCP server's complete 45-tool default surface and supporting behavior to Rust, preserve local stdio compatibility, add a safe hosted Streamable HTTP/OAuth transport, and deploy it at `https://mcp.social.dpdns.org`.
 
 **Architecture:** Keep the existing Python server as a fallback while adding a Cargo workspace. The Rust binary is split into API, safety, OAuth, transport, tools, and doctor boundaries; the root binary selects stdio or HTTP mode from environment. The reference repository is used as a behavioral and contract specification, with its MIT attribution preserved if code is directly ported.
 
@@ -517,7 +517,7 @@ Use only side-effect-free GET probes. Bound all network calls to ten seconds. Re
 
 - [ ] **Step 3: Update documentation and compatibility setup**
 
-Document Rust stdio/HTTP usage, both variable naming styles, `MCP_CAPABILITY_PROFILE`, `/data`, OAuth setup, `mcp.dpdns.org`, deployment health checks, rollback to Python, and the rule never to paste a real token into Git or chat. Keep the current Python installer clearly marked as fallback until the Rust installer is verified.
+Document Rust stdio/HTTP usage, both variable naming styles, `MCP_CAPABILITY_PROFILE`, `/data`, OAuth setup, `mcp.social.dpdns.org`, deployment health checks, rollback to Python, and the rule never to paste a real token into Git or chat. Keep the current Python installer clearly marked as fallback until the Rust installer is verified.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -589,7 +589,7 @@ git add Dockerfile.rust compose.rust.yaml .dockerignore scripts tests
 
 ---
 
-### Task 11: Deploy to `mcp.dpdns.org` and complete remote acceptance
+### Task 11: Deploy to `mcp.social.dpdns.org` and complete remote acceptance
 
 **Files:**
 - Create: `deploy/README.md`
@@ -598,15 +598,15 @@ git add Dockerfile.rust compose.rust.yaml .dockerignore scripts tests
 
 **Interfaces:**
 - Remote host: `sidney@77.90.40.213`.
-- Public MCP URL: `https://mcp.dpdns.org/mcp`.
-- Public health URL: `https://mcp.dpdns.org/healthz`.
+- Public MCP URL: `https://mcp.social.dpdns.org/mcp`.
+- Public health URL: `https://mcp.social.dpdns.org/healthz`.
 
 - [ ] **Step 1: Perform read-only host discovery over SSH**
 
 Run with `BatchMode=yes` and no secrets:
 
 ```bash
-ssh -o BatchMode=yes sidney@77.90.40.213 'uname -a; docker --version; docker compose version; getent hosts mcp.dpdns.org'
+ssh -o BatchMode=yes sidney@77.90.40.213 'uname -a; docker --version; docker compose version; getent hosts mcp.social.dpdns.org'
 ```
 
 Record whether Docker, Compose, DNS, and the existing HTTPS proxy are available. If the account cannot run Docker or the proxy is not configured, stop and report the exact missing prerequisite rather than attempting privileged changes.
@@ -617,23 +617,23 @@ Build the image locally or on the host from the reviewed commit. Transfer only s
 
 - [ ] **Step 3: Start the service with persistent state**
 
-Run the Rust container as non-root with port `8080`, `/data` persistence, `MCP_TRANSPORT=http`, `MCP_PUBLIC_URL=https://mcp.dpdns.org`, and the configured capability profile. Configure the existing proxy to route HTTPS to the container and health-check `/healthz`.
+Run the Rust container as non-root with port `8080`, `/data` persistence, `MCP_TRANSPORT=http`, `MCP_PUBLIC_URL=https://mcp.social.dpdns.org`, and the configured capability profile. Configure the existing proxy to route HTTPS to the container and health-check `/healthz`.
 
 - [ ] **Step 4: Verify public health and OAuth discovery**
 
 Run:
 
 ```bash
-curl --fail --silent https://mcp.dpdns.org/healthz
-curl --fail --silent https://mcp.dpdns.org/.well-known/oauth-protected-resource
-curl --fail --silent https://mcp.dpdns.org/.well-known/oauth-authorization-server
+curl --fail --silent https://mcp.social.dpdns.org/healthz
+curl --fail --silent https://mcp.social.dpdns.org/.well-known/oauth-protected-resource
+curl --fail --silent https://mcp.social.dpdns.org/.well-known/oauth-authorization-server
 ```
 
-Expected: health is `ok`, protected-resource metadata names `/mcp`, authorization metadata names `https://mcp.dpdns.org`, and no response contains a Coolify token.
+Expected: health is `ok`, protected-resource metadata names `/mcp`, authorization metadata names `https://mcp.social.dpdns.org`, and no response contains a Coolify token.
 
 - [ ] **Step 5: Complete one real client read-only smoke test**
 
-Use a real MCP client to complete OAuth and initialize against `https://mcp.dpdns.org/mcp`. Verify the complete tool roster and execute only a safe inventory/version call. Inspect logs for absence of token, password, env value, and raw response bodies.
+Use a real MCP client to complete OAuth and initialize against `https://mcp.social.dpdns.org/mcp`. Verify the complete tool roster and execute only a safe inventory/version call. Inspect logs for absence of token, password, env value, and raw response bodies.
 
 - [ ] **Step 6: Document rollback and commit deployment notes**
 

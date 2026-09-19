@@ -17,7 +17,7 @@ Implemented side-effect-free bounded doctor diagnostics, JSON/human reports, CLI
 
 ## Documentation
 
-Updated README, HOSTING, and `.env.example`; added `docs/rust-migration.md`. Documentation covers Rust stdio/HTTP, compatibility variable aliases, capability profiles, OAuth and `/data`, `mcp.dpdns.org`, health checks, rollback to Python, deployment safety, and the prohibition on placing real tokens in Git/chat/logs. No direct MIT code was ported, so no attribution change was necessary.
+Updated README, HOSTING, and `.env.example`; added `docs/rust-migration.md`. Documentation covers Rust stdio/HTTP, compatibility variable aliases, capability profiles, OAuth and `/data`, `mcp.social.dpdns.org`, health checks, rollback to Python, deployment safety, and the prohibition on placing real tokens in Git/chat/logs. No direct MIT code was ported, so no attribution change was necessary.
 
 ## Verification
 
@@ -29,3 +29,7 @@ Updated README, HOSTING, and `.env.example`; added `docs/rust-migration.md`. Doc
 - `git diff --check` — passed.
 
 No deployment was performed.
+
+## Hostname correction
+
+The hosted endpoint was corrected to the concrete `mcp.social.dpdns.org` host under the wildcard DNS zone `*.social.dpdns.org`. README, HOSTING, `.env.example`, migration documentation, and the approved plan/spec now use the corrected hostname; no product behavior changed.

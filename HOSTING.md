@@ -64,7 +64,7 @@ If a token is ever pasted into chat, a terminal transcript, a public issue, or a
 
 ## Rust HTTP deployment
 
-The Rust binary supports local stdio and authenticated Streamable HTTP. For `https://mcp.dpdns.org`, configure `MCP_TRANSPORT=http`, `MCP_PUBLIC_URL=https://mcp.dpdns.org`, `MCP_PORT=8080`, and a persistent `/data` volume for OAuth state. OAuth uses authorization code + PKCE; put the Coolify URL/token in runtime secrets, using either `COOLIFY_BASE_URL`/`COOLIFY_ACCESS_TOKEN` or the compatible `COOLIFY_URL`/`COOLIFY_TOKEN` aliases. Do not paste a real token into Git or chat.
+The hosted name is the concrete `mcp.social.dpdns.org` under the wildcard DNS zone `*.social.dpdns.org`; configure the certificate and proxy for that concrete hostname, not the parent zone. The Rust binary supports local stdio and authenticated Streamable HTTP. For `https://mcp.social.dpdns.org`, configure `MCP_TRANSPORT=http`, `MCP_PUBLIC_URL=https://mcp.social.dpdns.org`, `MCP_PORT=8080`, and a persistent `/data` volume for OAuth state. OAuth uses authorization code + PKCE; put the Coolify URL/token in runtime secrets, using either `COOLIFY_BASE_URL`/`COOLIFY_ACCESS_TOKEN` or the compatible `COOLIFY_URL`/`COOLIFY_TOKEN` aliases. Do not paste a real token into Git or chat.
 
 Configure a health check for `/healthz`, terminate TLS at the proxy, and ensure `/mcp` is forwarded rather than rewritten by a routing catch-all. Start with `MCP_CAPABILITY_PROFILE=read-only`; explicitly audit any move to operations/admin. Deployment validation must use health, discovery, tool listing, and safe read-only inventory only—never destructive calls.
 
