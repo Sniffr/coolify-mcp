@@ -47,12 +47,44 @@ impl DoctorCheck {
 }
 
 /// Sanitized metadata from one side-effect-free GET probe. Body is bounded by the caller.
+/// `location` carries the redirect Location header when present so proxy redirects
+/// remain detectable after automatic redirect handling is disabled.
 #[derive(Clone, Debug)]
 pub struct ProbeResponse {
     pub status: u16,
     pub content_type: Option<String>,
     pub body: String,
     pub redirected: bool,
+    pub location: Option<String>,
+}
+
+/// Effective capability exactly as the server runtime resolves it: `MCP_READONLY=true`
+/// forces read-only, then an explicit `MCP_CAPABILITY_PROFILE`, then the transport
+/// default (operations for stdio, read-only otherwise).
+pub(crate) fn effective_profile(env: &HashMap<String, String>) -> &'static str {
+    if env
+        .get("MCP_READONLY")
+        .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+    {
+        return "read-only";
+    }
+    if let Some(profile) = env.get("MCP_CAPABILITY_PROFILE") {
+        return match profile.as_str() {
+            "read-only" => "read-only",
+            "operations" => "operations",
+            "admin" => "admin",
+            _ => "invalid",
+        };
+    }
+    let transport = env
+        .get("MCP_TRANSPORT")
+        .map(String::as_str)
+        .unwrap_or("stdio");
+    if transport.eq_ignore_ascii_case("stdio") {
+        "operations"
+    } else {
+        "read-only"
+    }
 }
 
 pub(crate) fn static_checks(env: &HashMap<String, String>) -> Vec<DoctorCheck> {
@@ -171,21 +203,17 @@ pub(crate) fn static_checks(env: &HashMap<String, String>) -> Vec<DoctorCheck> {
             )),
         }
     }
-    let explicit = env.get("MCP_CAPABILITY_PROFILE").map(String::as_str);
-    let profile = explicit.unwrap_or_else(|| {
-        if env
-            .get("MCP_TRANSPORT")
-            .is_some_and(|v| v.eq_ignore_ascii_case("http"))
-        {
-            "read-only"
-        } else {
-            "operations"
-        }
-    });
+    let explicit = env.get("MCP_CAPABILITY_PROFILE").is_some();
+    let readonly_enforced = env
+        .get("MCP_READONLY")
+        .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+    let profile = effective_profile(env);
     checks.push(if matches!(profile, "read-only" | "operations" | "admin") {
         DoctorCheck::pass(
             "capability_profile",
-            if explicit.is_some() {
+            if readonly_enforced {
+                "Read-only capability enforced by MCP_READONLY"
+            } else if explicit {
                 "Capability profile is recognized"
             } else if profile == "read-only" {
                 "HTTP defaults to read-only capability"
@@ -213,8 +241,9 @@ where
     Fut: Future<Output = Result<ProbeResponse, String>>,
 {
     let mut checks = Vec::new();
+    let mut reachable_ok = false;
     match bounded(fetcher("/version")).await {
-        Ok(response) if (200..300).contains(&response.status) => {
+        Ok(response) if (200..300).contains(&response.status) && !is_html(&response) => {
             let parts = response.body.trim().split('.').take(2).collect::<Vec<_>>();
             let valid = parts.len() == 2
                 && parts[0] == "4"
@@ -237,6 +266,7 @@ where
                 "Coolify responded to a read-only version probe",
                 "No action required.",
             ));
+            reachable_ok = true;
         }
         Ok(response) if response.status == 401 || response.status == 403 => {
             checks.push(DoctorCheck::fail(
@@ -255,11 +285,7 @@ where
                 "Restore authorization, then run doctor again.",
             ));
         }
-        Ok(response)
-            if response.redirected
-                || (300..400).contains(&response.status)
-                || is_html(&response) =>
-        {
+        Ok(response) if is_redirect(&response) || is_html(&response) => {
             checks.push(DoctorCheck::fail(
                 "coolify_reachable",
                 "Coolify probe was redirected by a proxy or Cloudflare",
@@ -321,7 +347,7 @@ where
         Ok(response)
             if (400..500).contains(&response.status)
                 && is_json(&response)
-                && !response.redirected =>
+                && !is_redirect(&response) =>
         {
             checks.push(DoctorCheck::pass(
                 "routing_catch_all",
@@ -330,8 +356,7 @@ where
             ))
         }
         Ok(response)
-            if response.redirected
-                || (300..400).contains(&response.status)
+            if is_redirect(&response)
                 || is_html(&response)
                 || (200..300).contains(&response.status) =>
         {
@@ -347,27 +372,30 @@ where
             "Check the Coolify API route and proxy response headers.",
         )),
     }
-    let explicit_permission = env.get("MCP_DEPLOY_PERMISSION").map(|v| {
-        matches!(
-            v.to_ascii_lowercase().as_str(),
-            "true" | "yes" | "operations" | "admin"
+    // Deploy ability is inferred from the effective runtime capability only; doctor
+    // never triggers a deployment. A pass additionally requires a reachable Coolify
+    // so an offline host cannot claim deploy ability.
+    let profile = effective_profile(env);
+    let deploy_allowed = matches!(profile, "operations" | "admin");
+    checks.push(if deploy_allowed && reachable_ok {
+        DoctorCheck::pass(
+            "deploy_ability",
+            "Configured capability profile permits deployment operations",
+            "No action required.",
+        )
+    } else if deploy_allowed {
+        DoctorCheck::inconclusive(
+            "deploy_ability",
+            "Deploy capability is configured but Coolify was not reachable",
+            "Restore connectivity, then run doctor again; doctor never triggers deployment.",
+        )
+    } else {
+        DoctorCheck::fail(
+            "deploy_ability",
+            "No deployment capability is configured",
+            "Use an operations/admin profile without MCP_READONLY; doctor never triggers deployment.",
         )
     });
-    let profile = env
-        .get("MCP_CAPABILITY_PROFILE")
-        .map(String::as_str)
-        .unwrap_or_else(|| {
-            if env
-                .get("MCP_TRANSPORT")
-                .is_some_and(|v| v.eq_ignore_ascii_case("http"))
-            {
-                "read-only"
-            } else {
-                "operations"
-            }
-        });
-    let deploy_allowed = explicit_permission.unwrap_or(matches!(profile, "operations" | "admin"));
-    checks.push(if deploy_allowed { DoctorCheck::pass("deploy_ability", "Configured capability profile permits deployment operations", "No action required.") } else { DoctorCheck::fail("deploy_ability", "No deployment capability is configured", "Use an operations/admin profile or explicitly configure deploy permission; doctor never triggers deployment.") });
     checks
 }
 
@@ -377,13 +405,32 @@ fn is_json(response: &ProbeResponse) -> bool {
         .as_deref()
         .is_some_and(|v| v.to_ascii_lowercase().contains("json"))
 }
+fn is_redirect(response: &ProbeResponse) -> bool {
+    response.redirected
+        || (300..400).contains(&response.status)
+        || response.location.as_deref().is_some_and(|v| !v.is_empty())
+}
 fn is_html(response: &ProbeResponse) -> bool {
-    response
+    if response
         .content_type
         .as_deref()
         .is_some_and(|v| v.to_ascii_lowercase().contains("html"))
-        || response.body.to_ascii_lowercase().contains("<html")
-        || response.body.to_ascii_lowercase().contains("cloudflare")
+    {
+        return true;
+    }
+    let lower = response.body.to_ascii_lowercase();
+    [
+        "<html",
+        "<!doctype",
+        "<head",
+        "<body",
+        "<title",
+        "cloudflare",
+        "just a moment",
+        "attention required",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
 }
 async fn bounded<Fut>(future: Fut) -> Result<ProbeResponse, String>
 where

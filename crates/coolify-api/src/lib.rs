@@ -11,7 +11,7 @@ pub mod route_matrix;
 mod token_source;
 
 pub use api_shape::{pagination_query, unwrap_logs};
-pub use client::CoolifyClient;
+pub use client::{CoolifyClient, ProbeOutcome};
 pub use compatibility::{LegacyEndpoint, error_hint, error_hint_with_body};
 pub use config::{ConfigError, CoolifyConfig, config_from_env};
 pub use error::{CoolifyApiError, HttpErrorDetails, MAX_BODY_BYTES};

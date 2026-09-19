@@ -88,30 +88,15 @@ async fn main() {
             let path = path.to_owned();
             async move {
                 probe_client
-                    .request_text(reqwest::Method::GET, &path)
+                    .probe_get(&path)
                     .await
-                    .map_or_else(
-                        |error| {
-                            if let Some(status) = error.status() {
-                                Ok(doctor::ProbeResponse {
-                                    status,
-                                    content_type: Some("application/json".into()),
-                                    body: error.to_string(),
-                                    redirected: false,
-                                })
-                            } else {
-                                Err(error.to_string())
-                            }
-                        },
-                        |body| {
-                            Ok(doctor::ProbeResponse {
-                                status: 200,
-                                content_type: Some("application/json".into()),
-                                body,
-                                redirected: false,
-                            })
-                        },
-                    )
+                    .map(|outcome| doctor::ProbeResponse {
+                        status: outcome.status,
+                        content_type: outcome.content_type,
+                        body: outcome.body,
+                        redirected: outcome.redirected,
+                        location: outcome.location,
+                    })
             }
         })
         .await;
@@ -127,7 +112,20 @@ async fn main() {
     {
         CapabilityProfile::ReadOnly
     } else {
-        default_profile_for_transport(&transport)
+        match env.get("MCP_CAPABILITY_PROFILE").map(String::as_str) {
+            None => default_profile_for_transport(&transport),
+            Some(value) if value.eq_ignore_ascii_case("read-only") => CapabilityProfile::ReadOnly,
+            Some(value) if value.eq_ignore_ascii_case("operations") => {
+                CapabilityProfile::Operations
+            }
+            Some(value) if value.eq_ignore_ascii_case("admin") => CapabilityProfile::Admin,
+            Some(_) => {
+                eprintln!(
+                    "configuration error: MCP_CAPABILITY_PROFILE must be read-only, operations, or admin"
+                );
+                std::process::exit(2);
+            }
+        }
     };
     let context = ToolContext {
         client,

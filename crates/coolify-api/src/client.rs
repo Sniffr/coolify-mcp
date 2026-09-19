@@ -9,6 +9,18 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+/// Sanitized metadata from one side-effect-free GET probe. The body is bounded
+/// to [`MAX_BODY_BYTES`] with any configured token value redacted; `location`
+/// carries the redirect Location header so proxy redirects stay detectable.
+#[derive(Clone, Debug)]
+pub struct ProbeOutcome {
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub body: String,
+    pub redirected: bool,
+    pub location: Option<String>,
+}
+
 pub struct CoolifyClient {
     pub(crate) client: Client,
     pub(crate) config: CoolifyConfig,
@@ -96,6 +108,93 @@ impl CoolifyClient {
         self.request_text(Method::GET, "/version")
             .await
             .map(|v| v.trim().to_owned())
+    }
+    /// Side-effect-free GET probe that preserves real response metadata.
+    /// Automatic redirects are disabled so Cloudflare/proxy redirects surface as
+    /// 3xx responses with their Location header instead of being followed.
+    /// Every received response (any status) is returned as `Ok`; only transport
+    /// failures and timeouts are `Err`, with no secret values included.
+    pub async fn probe_get(&self, path: &str) -> Result<ProbeOutcome, String> {
+        use reqwest::header::{CONTENT_TYPE, LOCATION};
+        use std::time::Duration;
+        let url = self
+            .config
+            .base_url
+            .join("api/v1/")
+            .map_err(|e| e.to_string())?
+            .join(path.trim_start_matches('/'))
+            .map_err(|e| e.to_string())?;
+        let token = self
+            .config
+            .token_source
+            .current()
+            .map_err(|_| "token unavailable".to_owned())?;
+        let probe = Client::builder()
+            .timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| e.to_string())?;
+        let mut headers = HeaderMap::new();
+        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        let auth = format!("Bearer {token}");
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&auth).map_err(|_| "invalid token".to_owned())?,
+        );
+        for (key, value) in &self.config.custom_headers {
+            if key != AUTHORIZATION && key != CONTENT_TYPE {
+                headers.insert(key.clone(), value.clone());
+            }
+        }
+        let response = probe
+            .request(Method::GET, url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    "probe timed out after ten seconds".to_owned()
+                } else {
+                    "transport error".to_owned()
+                }
+            })?;
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let location = response
+            .headers()
+            .get(LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let redirected = (300..400).contains(&status) || location.is_some();
+        let mut bytes = Vec::new();
+        let mut response = response;
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| "transport error".to_owned())?
+        {
+            let remaining = MAX_BODY_BYTES.saturating_sub(bytes.len());
+            bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+            if bytes.len() == MAX_BODY_BYTES {
+                break;
+            }
+        }
+        let mut body = String::from_utf8_lossy(&bytes).into_owned();
+        if !token.is_empty() {
+            body = body.replace(&token, "[redacted]");
+        }
+        Ok(ProbeOutcome {
+            status,
+            content_type,
+            body: sanitize_text(&body),
+            redirected,
+            location,
+        })
     }
     async fn send(
         &self,
