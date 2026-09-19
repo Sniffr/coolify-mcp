@@ -16,10 +16,14 @@ pub use compatibility::{LegacyEndpoint, error_hint, error_hint_with_body};
 pub use config::{ConfigError, CoolifyConfig, config_from_env};
 pub use error::{CoolifyApiError, HttpErrorDetails, MAX_BODY_BYTES};
 pub use models::{
-    ApplicationSummary, DatabaseSummary, DeploymentSummary, EnvironmentVariable, ProjectSummary,
-    ServerSummary, ServiceSummary,
+    ActionResult, ApplicationSummary, BackupSummary, BoundedPayload, DatabaseSummary,
+    DeploymentSummary, DomainSummary, EnvironmentVariable, ProjectSummary, ServerSummary,
+    ServiceSummary, StorageSummary, TagSummary,
 };
 pub use token_source::{TokenSource, TokenSourceError};
+pub(crate) fn encode_segment(value: &str) -> String {
+    percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
+}
 pub fn is_running_status(status: Option<&str>) -> bool {
     let Some(status) = status else { return false };
     let lower = status.to_ascii_lowercase();

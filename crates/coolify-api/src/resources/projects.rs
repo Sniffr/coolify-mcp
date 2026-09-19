@@ -21,7 +21,10 @@ impl CoolifyClient {
         self.request_json(Method::PATCH, &format!("/projects/{uuid}"), Some(body))
             .await
     }
-    pub async fn delete_project(&self, uuid: &str) -> Result<Value, CoolifyApiError> {
+    pub async fn delete_project(
+        &self,
+        uuid: &str,
+    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
         self.request_json(
             Method::DELETE,
             &format!("/projects/{uuid}"),

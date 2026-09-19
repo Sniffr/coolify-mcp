@@ -1,5 +1,50 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionResult {
+    #[serde(default)]
+    pub uuid: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct BoundedPayload {
+    pub data: Value,
+}
+impl<'de> Deserialize<'de> for BoundedPayload {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Self {
+            data: Value::deserialize(d)?,
+        })
+    }
+}
+impl From<Value> for BoundedPayload {
+    fn from(data: Value) -> Self {
+        Self { data }
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageSummary {
+    pub uuid: String,
+    pub mount: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TagSummary {
+    pub uuid: String,
+    pub name: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupSummary {
+    pub uuid: String,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub schedule: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerSummary {
@@ -83,6 +128,25 @@ pub struct DatabaseSummary {
     #[serde(default)]
     pub environment_id: Option<i64>,
 }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DomainSummary {
+    pub fqdn: String,
+}
+fn domains_de<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>, D::Error> {
+    let v = Option::<Value>::deserialize(d)?;
+    Ok(v.map(|v| match v {
+        Value::Array(items) => items
+            .into_iter()
+            .filter_map(|x| {
+                x.as_str()
+                    .map(str::to_owned)
+                    .or_else(|| x.get("fqdn").and_then(Value::as_str).map(str::to_owned))
+            })
+            .collect(),
+        Value::String(s) => vec![s],
+        _ => Vec::new(),
+    }))
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceSummary {
     pub uuid: String,
@@ -91,7 +155,7 @@ pub struct ServiceSummary {
     pub r#type: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "domains_de")]
     pub domains: Option<Vec<String>>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]

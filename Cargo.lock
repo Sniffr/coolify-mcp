@@ -87,6 +87,7 @@ dependencies = [
 name = "coolify-api"
 version = "0.1.0"
 dependencies = [
+ "percent-encoding",
  "reqwest",
  "safety",
  "serde",

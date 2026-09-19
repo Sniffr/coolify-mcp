@@ -6,8 +6,12 @@ impl CoolifyClient {
         self.request_json(Method::GET, "/services", None).await
     }
     pub async fn get_service(&self, uuid: &str) -> Result<ServiceSummary, CoolifyApiError> {
-        self.request_json(Method::GET, &format!("/services/{uuid}"), None)
-            .await
+        self.request_json(
+            Method::GET,
+            &format!("/services/{}", crate::encode_segment(uuid)),
+            None,
+        )
+        .await
     }
     pub async fn create_service(&self, body: Value) -> Result<ServiceSummary, CoolifyApiError> {
         self.request_json(Method::POST, "/services", Some(body))

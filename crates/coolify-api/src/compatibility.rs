@@ -80,7 +80,11 @@ pub fn error_hint(status: u16, path: &str) -> Option<&'static str> {
     }
 }
 pub fn error_hint_with_body(status: u16, path: &str, body: &str) -> Option<&'static str> {
-    if status == 404 && (body.contains("Resource not found") || body.contains("UUID")) {
+    if status == 500 && (body.contains("scheduled") || body.contains("255")) {
+        Some(
+            "scheduled task commands longer than 255 characters are rejected by some Coolify versions",
+        )
+    } else if status == 404 && (body.contains("Resource not found") || body.contains("UUID")) {
         Some("verify the resource UUID belongs to this Coolify instance and team")
     } else {
         error_hint(status, path)

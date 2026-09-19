@@ -6,18 +6,26 @@ impl CoolifyClient {
         &self,
         uuid: &str,
     ) -> Result<Vec<crate::EnvironmentVariable>, CoolifyApiError> {
-        self.request_json(Method::GET, &format!("/applications/{uuid}/envs"), None)
-            .await
+        self.request_json(
+            Method::GET,
+            &format!("/applications/{}/envs", crate::encode_segment(uuid)),
+            None,
+        )
+        .await
     }
     pub async fn application_action(
         &self,
         uuid: &str,
         action: &str,
         body: Option<Value>,
-    ) -> Result<Value, CoolifyApiError> {
+    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
         self.request_json(
             Method::POST,
-            &format!("/applications/{uuid}/{action}"),
+            &format!(
+                "/applications/{}/{}",
+                crate::encode_segment(uuid),
+                crate::encode_segment(action)
+            ),
             body,
         )
         .await
@@ -28,7 +36,7 @@ impl CoolifyClient {
         storage_uuid: Option<&str>,
         method: Method,
         body: Option<Value>,
-    ) -> Result<Value, CoolifyApiError> {
+    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
         let path = format!(
             "/applications/{uuid}/storages{}",
             storage_uuid.map(|x| format!("/{x}")).unwrap_or_default()
@@ -41,7 +49,7 @@ impl CoolifyClient {
         tag_uuid: Option<&str>,
         method: Method,
         body: Option<Value>,
-    ) -> Result<Value, CoolifyApiError> {
+    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
         let path = format!(
             "/applications/{uuid}/tags{}",
             tag_uuid.map(|x| format!("/{x}")).unwrap_or_default()
@@ -54,7 +62,7 @@ impl CoolifyClient {
         action: &str,
         method: Method,
         body: Option<Value>,
-    ) -> Result<Value, CoolifyApiError> {
+    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
         self.request_json(method, &format!("/databases/{uuid}/{action}"), body)
             .await
     }
@@ -64,11 +72,14 @@ impl CoolifyClient {
         action: &str,
         method: Method,
         body: Option<Value>,
-    ) -> Result<Value, CoolifyApiError> {
+    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
         self.request_json(method, &format!("/services/{uuid}/{action}"), body)
             .await
     }
-    pub async fn project_environments(&self, uuid: &str) -> Result<Vec<Value>, CoolifyApiError> {
+    pub async fn project_environments(
+        &self,
+        uuid: &str,
+    ) -> Result<Vec<crate::BoundedPayload>, CoolifyApiError> {
         self.request_json(Method::GET, &format!("/projects/{uuid}/environments"), None)
             .await
     }
@@ -76,7 +87,7 @@ impl CoolifyClient {
         &self,
         action: &str,
         body: Option<Value>,
-    ) -> Result<Value, CoolifyApiError> {
+    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
         self.request_json(Method::POST, &format!("/system/{action}"), body)
             .await
     }
@@ -85,7 +96,7 @@ impl CoolifyClient {
         uuid: Option<&str>,
         method: Method,
         body: Option<Value>,
-    ) -> Result<Value, CoolifyApiError> {
+    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
         let path = format!("/s3{}", uuid.map(|x| format!("/{x}")).unwrap_or_default());
         self.request_json(method, &path, body).await
     }
@@ -94,7 +105,7 @@ impl CoolifyClient {
         uuid: Option<&str>,
         method: Method,
         body: Option<Value>,
-    ) -> Result<Value, CoolifyApiError> {
+    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
         let path = format!("/tags{}", uuid.map(|x| format!("/{x}")).unwrap_or_default());
         self.request_json(method, &path, body).await
     }

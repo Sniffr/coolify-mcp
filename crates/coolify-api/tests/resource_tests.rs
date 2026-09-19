@@ -58,6 +58,15 @@ fn application_domain_and_database_type_are_compatible() {
     let db: DatabaseSummary = serde_json::from_value(json!({"uuid":"d1","name":"db","database_type":"postgresql","status":"running","is_public":false,"environment_id":7})).unwrap();
     assert_eq!(db.r#type, "postgresql");
     assert_eq!(db.environment_id, Some(7));
+    let service: coolify_api::ServiceSummary = serde_json::from_value(
+        json!({"uuid":"s","name":"svc","domains":[{"fqdn":"https://svc.test"}, {"other":true}]}),
+    )
+    .unwrap();
+    assert_eq!(service.domains, Some(vec!["https://svc.test".to_string()]));
+    let unknown: coolify_api::ServiceSummary =
+        serde_json::from_value(json!({"uuid":"s","name":"svc","domains":{"unexpected":true}}))
+            .unwrap();
+    assert_eq!(unknown.domains, Some(Vec::new()));
 }
 
 #[test]

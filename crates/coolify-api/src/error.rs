@@ -115,6 +115,12 @@ impl CoolifyApiError {
             _ => false,
         }
     }
+    pub fn hint(&self) -> Option<&'static str> {
+        match self {
+            Self::Http { status, body, .. } => crate::error_hint_with_body(*status, "", body),
+            _ => None,
+        }
+    }
     pub fn status(&self) -> Option<u16> {
         match self {
             Self::Http { status, .. } => Some(*status),

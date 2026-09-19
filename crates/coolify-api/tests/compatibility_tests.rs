@@ -1,4 +1,7 @@
-use coolify_api::{CoolifyClient, LegacyEndpoint, api_shape, config_from_env, error_hint};
+use coolify_api::route_matrix::{ROUTE_MATRIX, SafetyClass};
+use coolify_api::{
+    CoolifyClient, LegacyEndpoint, api_shape, config_from_env, error_hint, error_hint_with_body,
+};
 use std::{
     collections::HashMap,
     io::{Read, Write},
@@ -80,6 +83,24 @@ async fn fallback_caches_get_and_reprobes_after_cached_405() {
 }
 
 #[tokio::test]
+async fn deployment_poll_stops_on_terminal_projection() {
+    let body1 = r#"{"uuid":"d","deployment_uuid":"dep","status":"running","created_at":"now"}"#;
+    let body2 = r#"{"uuid":"d","deployment_uuid":"dep","status":"finished","created_at":"now"}"#;
+    let (base, seen) = fake_server(vec![(200, body1), (200, body2)]);
+    let client = client_at(base);
+    let result = client
+        .poll_deployment(
+            "d",
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.status, "finished");
+    assert_eq!(seen.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn controller_errors_do_not_retry_mutation() {
     for status in [404, 422, 500] {
         let (base, seen) = fake_server(vec![(status, r#"{"message":"controller"}"#)]);
@@ -97,8 +118,58 @@ async fn controller_errors_do_not_retry_mutation() {
 }
 
 #[test]
+fn route_matrix_has_unique_explicit_contracts() {
+    let mut keys = std::collections::HashSet::new();
+    for route in ROUTE_MATRIX {
+        assert!(keys.insert((route.group, route.action)));
+        assert!(!route.method.is_empty());
+        assert!(!route.path.contains(" and "));
+        assert!(!route.projection.is_empty());
+        if route.method.contains("{") {
+            assert!(!route.required_args.is_empty());
+        }
+        if route.safety == SafetyClass::Read {
+            assert!(
+                !route.method.contains("POST")
+                    && !route.method.contains("PATCH")
+                    && !route.method.contains("DELETE")
+            );
+        }
+    }
+    assert!(
+        ROUTE_MATRIX
+            .iter()
+            .any(|r| r.action == "application_logs" && r.path == "/applications/{uuid}/logs")
+    );
+    assert!(
+        ROUTE_MATRIX
+            .iter()
+            .any(|r| r.action == "deployment_cancel" && r.required_args == ["uuid"])
+    );
+}
+
+#[test]
 fn known_error_hints_are_stable() {
     assert!(error_hint(500, "/scheduled-tasks").is_some());
     assert!(error_hint(405, "/servers/s/validate").is_some());
     assert!(error_hint(403, "/servers").is_some());
+    assert!(
+        error_hint_with_body(500, "/scheduled-tasks", "command exceeds 255 characters").is_some()
+    );
+    assert!(error_hint_with_body(404, "/applications/x", "Resource not found").is_some());
+    assert!(error_hint_with_body(404, "/applications/x", "Not found.").is_none());
+}
+
+#[tokio::test]
+async fn client_error_exposes_body_derived_hint() {
+    let (base, _) = fake_server(vec![(
+        500,
+        r#"{"message":"scheduled command exceeds 255 characters"}"#,
+    )]);
+    let client = client_at(base);
+    let error = client
+        .request_json::<serde_json::Value>(reqwest::Method::GET, "/scheduled-tasks", None)
+        .await
+        .unwrap_err();
+    assert!(error.hint().is_some());
 }

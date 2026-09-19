@@ -15,14 +15,18 @@ impl CoolifyClient {
         .await
     }
     pub async fn get_application(&self, uuid: &str) -> Result<ApplicationSummary, CoolifyApiError> {
-        self.request_json(Method::GET, &format!("/applications/{uuid}"), None)
-            .await
+        self.request_json(
+            Method::GET,
+            &format!("/applications/{}", crate::encode_segment(uuid)),
+            None,
+        )
+        .await
     }
     pub async fn create_application(
         &self,
         kind: &str,
         body: Value,
-    ) -> Result<Value, CoolifyApiError> {
+    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
         self.request_json(Method::POST, &format!("/applications/{kind}"), Some(body))
             .await
     }
@@ -30,14 +34,21 @@ impl CoolifyClient {
         &self,
         uuid: &str,
         body: Value,
-    ) -> Result<Value, CoolifyApiError> {
-        self.request_json(Method::PATCH, &format!("/applications/{uuid}"), Some(body))
-            .await
+    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
+        self.request_json(
+            Method::PATCH,
+            &format!("/applications/{}", crate::encode_segment(uuid)),
+            Some(body),
+        )
+        .await
     }
-    pub async fn delete_application(&self, uuid: &str) -> Result<Value, CoolifyApiError> {
+    pub async fn delete_application(
+        &self,
+        uuid: &str,
+    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
         self.request_json(
             Method::DELETE,
-            &format!("/applications/{uuid}"),
+            &format!("/applications/{}", crate::encode_segment(uuid)),
             Some(serde_json::json!({"delete_volumes":false})),
         )
         .await

@@ -6,10 +6,18 @@ impl CoolifyClient {
         self.request_json(Method::GET, "/databases", None).await
     }
     pub async fn get_database(&self, uuid: &str) -> Result<DatabaseSummary, CoolifyApiError> {
-        self.request_json(Method::GET, &format!("/databases/{uuid}"), None)
-            .await
+        self.request_json(
+            Method::GET,
+            &format!("/databases/{}", crate::encode_segment(uuid)),
+            None,
+        )
+        .await
     }
-    pub async fn create_database(&self, kind: &str, body: Value) -> Result<Value, CoolifyApiError> {
+    pub async fn create_database(
+        &self,
+        kind: &str,
+        body: Value,
+    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
         self.request_json(Method::POST, &format!("/databases/{kind}"), Some(body))
             .await
     }
