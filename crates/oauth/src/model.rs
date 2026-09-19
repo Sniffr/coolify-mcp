@@ -47,7 +47,7 @@ pub struct TokenRequest {
     pub refresh_token: Option<String>,
     pub resource: Option<String>,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TokenResponse {
     pub access_token: String,
     pub refresh_token: String,
