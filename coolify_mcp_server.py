@@ -11,19 +11,33 @@ import urllib.parse
 import urllib.request
 
 
+# MCP stdio clients (e.g. Claude Code) send newline-delimited JSON; some others use
+# Content-Length framing. The framing of the first message is used for all replies.
+FRAMING = "content-length"
+
+
 def write_message(message):
     raw = json.dumps(message, separators=(",", ":")).encode()
-    sys.stdout.buffer.write(f"Content-Length: {len(raw)}\r\n\r\n".encode() + raw)
+    if FRAMING == "newline":
+        sys.stdout.buffer.write(raw + b"\n")
+    else:
+        sys.stdout.buffer.write(f"Content-Length: {len(raw)}\r\n\r\n".encode() + raw)
     sys.stdout.buffer.flush()
 
 
 def read_message():
+    global FRAMING
     headers = {}
     while True:
         line = sys.stdin.buffer.readline()
         if not line:
             return None
+        if not headers and line.lstrip().startswith(b"{"):
+            FRAMING = "newline"
+            return json.loads(line)
         if line in (b"\r\n", b"\n"):
+            if not headers:
+                continue
             break
         key, value = line.decode("ascii").split(":", 1)
         headers[key.lower()] = value.strip()
