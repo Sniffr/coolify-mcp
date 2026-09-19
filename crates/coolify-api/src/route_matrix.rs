@@ -597,7 +597,7 @@ pub const ROUTE_MATRIX: &[RouteSpec] = &[
         "GET",
         "/services/{uuid}/applications",
         &["uuid"],
-        "ChildSummary[]",
+        "ActionResult",
         Read,
         "v4.2+ route"
     ),

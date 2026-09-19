@@ -156,6 +156,56 @@ fn route_matrix_has_unique_explicit_contracts() {
             .iter()
             .any(|r| r.action == "deployment_cancel" && r.required_args == ["uuid"])
     );
+    let expected = [
+        ("list_servers", "GET", "/servers", "ServerSummary[]"),
+        (
+            "validate_server",
+            "POST",
+            "/servers/{uuid}/validate",
+            "ValidationResult",
+        ),
+        (
+            "application_logs",
+            "GET",
+            "/applications/{uuid}/logs",
+            "BoundedLogs",
+        ),
+        (
+            "database_logs",
+            "GET",
+            "/databases/{uuid}/logs",
+            "BoundedLogs",
+        ),
+        (
+            "service_children",
+            "GET",
+            "/services/{uuid}/applications",
+            "ActionResult",
+        ),
+        (
+            "deployment_trigger",
+            "POST",
+            "/deploy",
+            "DeploymentProjection",
+        ),
+        (
+            "deployment_cancel",
+            "POST",
+            "/deployments/{uuid}/cancel",
+            "ActionResult",
+        ),
+        ("system_get", "GET", "/system", "SystemSummary"),
+    ];
+    for (action, method, path, projection) in expected {
+        let route = ROUTE_MATRIX
+            .iter()
+            .find(|r| r.action == action)
+            .expect(action);
+        assert_eq!(
+            (route.method, route.path, route.projection),
+            (method, path, projection)
+        );
+    }
 }
 
 #[test]
@@ -194,6 +244,26 @@ async fn deployment_operations_use_typed_paths_and_projections() {
     assert!(requests[0].starts_with("GET /api/v1/deployments"));
     assert!(requests[1].starts_with("GET /api/v1/deployments/d/logs"));
     assert!(requests[2].starts_with("POST /api/v1/deployments/d/cancel"));
+}
+
+#[tokio::test]
+async fn child_operation_segments_are_encoded() {
+    let (base, seen) = fake_server(vec![
+        (200, r#"{"status":"ok"}"#),
+        (200, r#"{"status":"ok"}"#),
+    ]);
+    let client = client_at(base);
+    let _ = client
+        .application_storage("a/b ?#", Some("s/t ?#"), reqwest::Method::GET, None)
+        .await
+        .unwrap();
+    let _ = client
+        .application_tags("a/b ?#", Some("t/u ?#"), reqwest::Method::GET, None)
+        .await
+        .unwrap();
+    let requests = seen.lock().unwrap().clone();
+    assert!(requests[0].contains("/applications/a%2Fb%20%3F%23/storages/s%2Ft%20%3F%23"));
+    assert!(requests[1].contains("/applications/a%2Fb%20%3F%23/tags/t%2Fu%20%3F%23"));
 }
 
 #[tokio::test]

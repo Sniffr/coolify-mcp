@@ -1,6 +1,19 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationResult {
+    #[serde(default)]
+    pub valid: bool,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionResult {
     #[serde(default)]
     pub uuid: Option<String>,

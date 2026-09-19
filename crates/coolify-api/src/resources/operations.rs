@@ -38,7 +38,8 @@ impl CoolifyClient {
         body: Option<Value>,
     ) -> Result<crate::ActionResult, CoolifyApiError> {
         let path = format!(
-            "/applications/{uuid}/storages{}",
+            "/applications/{}/storages{}",
+            crate::encode_segment(uuid),
             storage_uuid
                 .map(|x| format!("/{}", crate::encode_segment(x)))
                 .unwrap_or_default()
@@ -53,7 +54,8 @@ impl CoolifyClient {
         body: Option<Value>,
     ) -> Result<crate::ActionResult, CoolifyApiError> {
         let path = format!(
-            "/applications/{uuid}/tags{}",
+            "/applications/{}/tags{}",
+            crate::encode_segment(uuid),
             tag_uuid
                 .map(|x| format!("/{}", crate::encode_segment(x)))
                 .unwrap_or_default()
@@ -125,7 +127,11 @@ impl CoolifyClient {
         method: Method,
         body: Option<Value>,
     ) -> Result<crate::ActionResult, CoolifyApiError> {
-        let path = format!("/s3{}", uuid.map(|x| format!("/{x}")).unwrap_or_default());
+        let path = format!(
+            "/s3{}",
+            uuid.map(|x| format!("/{}", crate::encode_segment(x)))
+                .unwrap_or_default()
+        );
         self.request_json(method, &path, body).await
     }
     pub async fn tags(
@@ -134,7 +140,11 @@ impl CoolifyClient {
         method: Method,
         body: Option<Value>,
     ) -> Result<crate::ActionResult, CoolifyApiError> {
-        let path = format!("/tags{}", uuid.map(|x| format!("/{x}")).unwrap_or_default());
+        let path = format!(
+            "/tags{}",
+            uuid.map(|x| format!("/{}", crate::encode_segment(x)))
+                .unwrap_or_default()
+        );
         self.request_json(method, &path, body).await
     }
 }

@@ -19,7 +19,7 @@ pub use models::{
     ActionResult, ApplicationSummary, BackupSummary, ChildSummary, DatabaseSummary,
     DeploymentSummary, DiagnosticSummary, DomainSummary, EnvironmentSummary, EnvironmentVariable,
     ProjectSummary, S3StorageSummary, ScheduledTaskSummary, ServerSummary, ServiceSummary,
-    StorageSummary, SystemSummary, TagSummary,
+    StorageSummary, SystemSummary, TagSummary, ValidationResult,
 };
 pub use token_source::{TokenSource, TokenSourceError};
 pub(crate) fn encode_segment(value: &str) -> String {

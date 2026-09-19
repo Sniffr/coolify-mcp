@@ -1,4 +1,4 @@
-use crate::{CoolifyApiError, CoolifyClient, ServerSummary};
+use crate::{CoolifyApiError, CoolifyClient, ServerSummary, ValidationResult};
 use reqwest::Method;
 impl CoolifyClient {
     pub async fn list_servers(
@@ -21,7 +21,7 @@ impl CoolifyClient {
         )
         .await
     }
-    pub async fn validate_server(&self, uuid: &str) -> Result<serde_json::Value, CoolifyApiError> {
+    pub async fn validate_server(&self, uuid: &str) -> Result<ValidationResult, CoolifyApiError> {
         self.post_with_legacy_get_fallback(
             crate::LegacyEndpoint::ServersValidate,
             &format!("/servers/{}/validate", crate::encode_segment(uuid)),

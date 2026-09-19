@@ -1,6 +1,6 @@
 use coolify_api::{
     ApplicationSummary, CoolifyClient, DatabaseSummary, DeploymentSummary, ServerSummary,
-    config_from_env, is_running_status,
+    ValidationResult, config_from_env, is_running_status,
 };
 use serde_json::json;
 use std::{
@@ -39,6 +39,14 @@ async fn application_list_uses_encoded_pagination_and_summary_projection() {
     assert_eq!(apps[0].fqdn.as_deref(), Some("https://example.test"));
     let request = seen.lock().unwrap().clone();
     assert!(request.starts_with("GET /api/v1/applications?page=2&per_page=50"));
+}
+
+#[test]
+fn validation_projection_discards_unknown_fields() {
+    let result: ValidationResult=serde_json::from_value(json!({"valid":true,"status":"ok","message":"ready","version":"4.0","capabilities":["deploy"],"secret":"discard"})).unwrap();
+    assert!(result.valid);
+    assert_eq!(result.status.as_deref(), Some("ok"));
+    assert_eq!(result.capabilities, vec!["deploy"]);
 }
 
 #[test]
