@@ -9,6 +9,8 @@ use sha2::Digest;
 fn rejects_oauth_attack_inputs() {
     assert!(canonical_resource("https://example.test/mcp").is_ok());
     assert!(canonical_resource("https://example.test/mcp#fragment").is_err());
+    assert!(canonical_resource("http://127.0.0.1:18080/mcp").is_ok());
+    assert!(canonical_resource("http://example.test/mcp").is_err());
     assert!(!redirect_uri_matches(
         "https://client.test/cb",
         "https://client.test/other"

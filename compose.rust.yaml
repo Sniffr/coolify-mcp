@@ -17,9 +17,10 @@ services:
     volumes:
       - oauth-data:/data
     healthcheck:
-      test: ["CMD", "sh", "-c", "test -r /data || exit 1"]
+      test: ["CMD-SHELL", "test -w /data && curl --fail --silent --max-time 3 http://127.0.0.1:8080/healthz"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 3
+      start_period: 15s
 volumes:
   oauth-data:

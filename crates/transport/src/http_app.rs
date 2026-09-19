@@ -99,6 +99,7 @@ pub fn router_with_app<A: McpApplication + 'static>(config: HttpConfig, app: A) 
         )
         .route("/oauth/register", post(register))
         .route("/oauth/authorize", get(authorize))
+        .route("/oauth/state", post(oauth_state))
         .route("/oauth/token", post(token))
         .route("/mcp", post(mcp).get(mcp_get).delete(mcp_delete))
         .layer(DefaultBodyLimit::max(state.config.max_body_bytes))
@@ -124,12 +125,12 @@ async fn health(State(s): State<AppState>) -> Response {
 }
 async fn discovery(State(s): State<AppState>) -> impl IntoResponse {
     Json(
-        json!({"issuer":s.config.public_url.to_string(),"authorization_endpoint":format!("{}/oauth/authorize",s.config.public_url),"token_endpoint":format!("{}/oauth/token",s.config.public_url),"registration_endpoint":format!("{}/oauth/register",s.config.public_url),"response_types_supported":["code"],"code_challenge_methods_supported":["S256"]}),
+        json!({"issuer":crate::http::public_base(&s.config.public_url),"authorization_endpoint":format!("{}/oauth/authorize",crate::http::public_base(&s.config.public_url)),"token_endpoint":format!("{}/oauth/token",crate::http::public_base(&s.config.public_url)),"registration_endpoint":format!("{}/oauth/register",crate::http::public_base(&s.config.public_url)),"response_types_supported":["code"],"code_challenge_methods_supported":["S256"]}),
     )
 }
 async fn protected_resource(State(s): State<AppState>) -> impl IntoResponse {
     Json(
-        json!({"resource":format!("{}/mcp",s.config.public_url),"authorization_servers":[s.config.public_url.to_string()]}),
+        json!({"resource":crate::http::mcp_resource_url(&s.config.public_url),"authorization_servers":[crate::http::public_base(&s.config.public_url)]}),
     )
 }
 fn client_key(s: &AppState, headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
@@ -156,6 +157,32 @@ async fn register(
     }
     match s.config.oauth.register(req) {
         Ok(v) => (StatusCode::CREATED, Json(v)).into_response(),
+        Err(e) => {
+            mark_persistence_error(&s, &e);
+            oauth_error(e)
+        }
+    }
+}
+#[derive(Deserialize)]
+struct OAuthStateRequest {
+    client_id: String,
+    redirect_uri: String,
+}
+async fn oauth_state(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    peer: ConnectInfo<SocketAddr>,
+    Json(req): Json<OAuthStateRequest>,
+) -> Response {
+    if !limited(&s, &headers, Some(peer.0), "authorize") {
+        return rate_error();
+    }
+    match s
+        .config
+        .oauth
+        .create_state(&req.client_id, &req.redirect_uri)
+    {
+        Ok(state) => Json(json!({"state": state})).into_response(),
         Err(e) => {
             mark_persistence_error(&s, &e);
             oauth_error(e)
@@ -285,7 +312,7 @@ fn authorized(headers: &HeaderMap, s: &AppState) -> Result<String, StatusCode> {
         .ok_or(StatusCode::UNAUTHORIZED)?;
     s.config
         .oauth
-        .verify_bearer(value, &format!("{}/mcp", s.config.public_url))
+        .verify_bearer(value, &crate::http::mcp_resource_url(&s.config.public_url))
         .map_err(|_| StatusCode::UNAUTHORIZED)
 }
 fn accepts_json(headers: &HeaderMap) -> bool {

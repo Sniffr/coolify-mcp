@@ -180,7 +180,7 @@ async fn main() {
                 .unwrap_or_else(|| "/data/oauth-state.json".into()),
         );
         let (oauth, persistence_available) = match oauth::OAuthProvider::with_store(
-            public_url.to_string(),
+            transport::public_base(&public_url),
             "/mcp".into(),
             state_path,
         ) {
@@ -189,7 +189,7 @@ async fn main() {
                 eprintln!("OAuth persistence unavailable; HTTP health will be degraded: {error}");
                 (
                     Arc::new(oauth::OAuthProvider::new(
-                        public_url.to_string(),
+                        transport::public_base(&public_url),
                         "/mcp".into(),
                     )),
                     false,

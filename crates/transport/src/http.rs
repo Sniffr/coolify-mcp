@@ -22,6 +22,15 @@ pub fn normalize_public_url(raw: &str) -> Result<Url, UrlError> {
     normalize_public_url_with_insecure(raw, false)
 }
 
+/// Base public URL without a trailing slash, so endpoint concatenation never
+/// produces a double slash (which would fail OAuth resource comparison).
+pub fn public_base(public_url: &Url) -> String {
+    public_url.as_str().trim_end_matches('/').to_owned()
+}
+/// Canonical `…/mcp` resource identifier bound to OAuth tokens.
+pub fn mcp_resource_url(public_url: &Url) -> String {
+    format!("{}/mcp", public_base(public_url))
+}
 /// Normalize a public URL, allowing plain HTTP only for explicitly local acceptance runs.
 pub fn normalize_public_url_with_insecure(
     raw: &str,
@@ -62,7 +71,7 @@ impl HttpConfig {
     pub fn for_tests() -> Self {
         let public_url = Url::parse("https://example.test").unwrap();
         Self {
-            oauth: Arc::new(OAuthProvider::new(public_url.to_string(), "/mcp".into())),
+            oauth: Arc::new(OAuthProvider::new(public_base(&public_url), "/mcp".into())),
             public_url,
             bind: "127.0.0.1:0".parse().unwrap(),
             max_body_bytes: 5 * 1024 * 1024,

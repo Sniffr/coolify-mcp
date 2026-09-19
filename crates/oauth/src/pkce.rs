@@ -45,7 +45,11 @@ pub fn redirect_uri_matches(registered: &str, requested: &str) -> bool {
 pub fn canonical_resource(value: &str) -> Result<String, crate::OAuthError> {
     let u = Url::parse(value)
         .map_err(|_| crate::OAuthError::InvalidRequest("invalid resource".into()))?;
-    if u.scheme() != "https"
+    let loopback = matches!(
+        u.host_str(),
+        Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+    );
+    if !(u.scheme() == "https" || (u.scheme() == "http" && loopback))
         || u.fragment().is_some()
         || u.query().is_some()
         || !u.username().is_empty()
@@ -54,7 +58,7 @@ pub fn canonical_resource(value: &str) -> Result<String, crate::OAuthError> {
         || u.path() != "/mcp"
     {
         return Err(crate::OAuthError::InvalidRequest(
-            "resource must be an HTTPS /mcp URL".into(),
+            "resource must be an HTTPS /mcp URL (plain HTTP loopback only)".into(),
         ));
     }
     let host = u
