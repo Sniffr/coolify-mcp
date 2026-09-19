@@ -5,6 +5,69 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
+/// Approved default tool roster: exact names in exact order. This literal is
+/// transcribed from the approved registry and must not be derived from the
+/// server response or client registry at runtime.
+const EXPECTED_TOOL_NAMES: [&str; 45] = [
+    "application",
+    "application_logs",
+    "bulk_env_update",
+    "cloud_tokens",
+    "control",
+    "database",
+    "database_backups",
+    "deploy",
+    "deployment",
+    "diagnose_app",
+    "diagnose_server",
+    "env_vars",
+    "environments",
+    "find_issues",
+    "get_application",
+    "get_database",
+    "get_infrastructure_overview",
+    "get_mcp_version",
+    "get_server",
+    "get_service",
+    "get_version",
+    "github_apps",
+    "hetzner",
+    "list_applications",
+    "list_databases",
+    "list_deployments",
+    "list_destinations",
+    "list_servers",
+    "list_services",
+    "logs",
+    "private_keys",
+    "projects",
+    "redeploy_project",
+    "restart_project_apps",
+    "scheduled_tasks",
+    "search_docs",
+    "server_domains",
+    "server_resources",
+    "service",
+    "stop_all_apps",
+    "storages",
+    "system",
+    "tags",
+    "teams",
+    "validate_server",
+];
+
+fn assert_tool_roster(tools: &[Value]) {
+    let names: Vec<&str> = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap_or("?missing-name"))
+        .collect();
+    assert_eq!(
+        names.as_slice(),
+        EXPECTED_TOOL_NAMES.as_slice(),
+        "tool roster mismatch: expected the approved 45-name roster in order"
+    );
+}
+
 async fn rpc(
     body: &Value,
     response: reqwest::Response,
@@ -179,7 +242,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tools = listed_json["result"]["tools"]
         .as_array()
         .ok_or("missing tools")?;
-    assert_eq!(tools.len(), 45, "expected exact default roster");
+    assert_tool_roster(tools);
     async fn rpc_call(
         client: &Client,
         resource: &str,

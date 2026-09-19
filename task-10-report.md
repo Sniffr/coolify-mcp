@@ -42,6 +42,21 @@ Implemented the Rust production-container and local acceptance harness.
 - Container smoke run — passed (`Rust container smoke test passed`); image verified `uid=10001`, `/data drwx------`, `curl` present, no secrets in image env.
 - `docker compose -f compose.rust.yaml config` — validates with the real `/healthz` healthcheck.
 
+## Fix round 2 verification
+
+- `cargo fmt --all` — passed.
+- `cargo test --workspace` — passed (no failures).
+- `cargo clippy --workspace --all-targets -- -D warnings` — passed.
+- `./scripts/acceptance-rust.sh` — passed (`Rust local acceptance passed`) against the exact-sequence assertion.
+- `docker build -f Dockerfile.rust -t sniffr-coolify-mcp:acceptance .` — passed.
+- Container smoke run — passed (`Rust container smoke test passed`).
+
+## Fix round 2 (remaining review findings)
+
+- Fake Coolify fixture now records every real API request as `METHOD decoded-target` in arrival order plus `requests`/`unauthorized`/`not_found` counters; `__fixture__/stats` returns all four (`calls` array included) without counting its own probes. Unknown paths return fixture `404 {"error":"fixture: unknown path"}` and increment `not_found` instead of a successful empty response (verified manually: unknown path → 404, missing auth → 401, stats show both classifications).
+- `scripts/acceptance-rust.sh` asserts the exact ordered 9-call sequence (`GET /api/v1/version`, `GET /api/v1/applications?page=1&per_page=50`, `GET /api/v1/applications/app-1/logs?lines=20` ×3: HTTP pass, stdio NDJSON pass, stdio Content-Length pass) with `requests == 9`, `unauthorized == 0`, `not_found == 0` — no range. Any compatibility retry, unauthorized probe, unknown-path hit, or extra call fails the assertion.
+- Both HTTP and stdio interop clients replace `tools.len() == 45` with an independent literal `EXPECTED_TOOL_NAMES: [&str; 45]` name-and-order assertion transcribed from the approved roster; nothing is derived from the server response or registry at runtime.
+
 ## Concerns
 
 - The HTTP interop client is an executable acceptance harness and expects an already-running server; it does not spawn the fake Coolify fixture itself.

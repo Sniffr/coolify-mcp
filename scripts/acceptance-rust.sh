@@ -42,19 +42,22 @@ test "$mcp_ready" = 1 || { echo 'MCP server failed to become ready' >&2; exit 1;
 "$REPO_ROOT/target/debug/http-oauth-interop" "http://127.0.0.1:$MCP_PORT"
 COOLIFY_BASE_URL="http://127.0.0.1:$FIXTURE_PORT" "$REPO_ROOT/target/debug/stdio-interop" "$MCP"
 fixture_stats=$(curl --silent --fail --max-time 5 "http://127.0.0.1:$FIXTURE_PORT/__fixture__/stats")
-echo "$fixture_stats" | grep -q '"unauthorized":0'
-requests=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["requests"])' <<EOF
-$fixture_stats
+# Exact expected fixture traffic: HTTP safe calls (version, inventory, logs)
+# followed by the stdio NDJSON pass and the stdio Content-Length pass.
+# Any compatibility retry, unauthorized probe, unknown-path hit, or extra
+# call changes the sequence/count and fails the assertion.
+python3 - "$fixture_stats" <<'EOF'
+import json, sys
+stats = json.loads(sys.argv[1])
+safe_sequence = [
+    "GET /api/v1/version",
+    "GET /api/v1/applications?page=1&per_page=50",
+    "GET /api/v1/applications/app-1/logs?lines=20",
+]
+expected = safe_sequence + safe_sequence + safe_sequence
+assert stats["requests"] == 9, stats
+assert stats["unauthorized"] == 0, stats
+assert stats["not_found"] == 0, stats
+assert stats["calls"] == expected, stats
 EOF
-)
-unauthorized=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["unauthorized"])' <<EOF
-$fixture_stats
-EOF
-)
-test "$unauthorized" = 0
-# 3 HTTP calls + 6 stdio calls (2 framing modes x 3 tools). A tight bound
-# proves the safe calls occurred, no unauthorized requests happened, and no
-# unsafe compatibility fallback retries inflated the traffic.
-test "$requests" -ge 9
-test "$requests" -le 12
 echo 'Rust local acceptance passed'
