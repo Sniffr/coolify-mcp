@@ -138,7 +138,7 @@ fn client_key(s: &AppState, headers: &HeaderMap, peer: Option<SocketAddr>) -> St
     {
         return value.chars().take(128).collect();
     }
-    peer.map(|address| address.to_string())
+    peer.map(|address| address.ip().to_string())
         .unwrap_or_else(|| "unknown-peer".into())
 }
 fn limited(s: &AppState, headers: &HeaderMap, peer: Option<SocketAddr>, endpoint: &str) -> bool {

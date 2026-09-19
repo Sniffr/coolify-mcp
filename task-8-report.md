@@ -73,3 +73,15 @@ Fix-round 3 verification:
 - `cargo test --workspace` — passed.
 - `cargo clippy --workspace --all-targets -- -D warnings` — passed.
 - `cargo fmt --all` — completed.
+
+## Fix round 4 — 2026-09-19
+
+Corrected rate-limit keying to use the actual peer IP from `ConnectInfo<SocketAddr>.ip()`, avoiding separate buckets for ephemeral source ports while retaining accepted-peer extraction and trusted-proxy opt-in handling. Added a regression test proving two source ports from `127.0.0.1` share a bucket, a distinct IP receives an independent bucket, and spoofed forwarding headers do not affect untrusted keying.
+
+Fix-round 4 verification:
+
+- Focused peer-IP regression test — passed.
+- `cargo test -p transport` — passed.
+- `cargo test --workspace` — passed.
+- `cargo clippy --workspace --all-targets -- -D warnings` — passed.
+- `cargo fmt --all` — completed.

@@ -115,15 +115,19 @@ async fn oauth_mutation_endpoints_rate_limit_by_client_ip() {
 }
 
 #[tokio::test]
-async fn peer_addresses_get_independent_rate_buckets_and_forwarded_ip_is_ignored() {
+async fn peer_ip_rate_buckets_ignore_ports_and_forwarded_ip_spoofing() {
     let app = router_with_app(HttpConfig::for_tests(), TestApp);
     let mut make = app.into_make_service_with_connect_info::<SocketAddr>();
     let mut peer_one = make
         .call("127.0.0.1:10001".parse::<SocketAddr>().unwrap())
         .await
         .unwrap();
-    let mut peer_two = make
+    let mut same_ip_different_port = make
         .call("127.0.0.1:10002".parse::<SocketAddr>().unwrap())
+        .await
+        .unwrap();
+    let mut distinct_ip = make
+        .call("192.0.2.10:10001".parse::<SocketAddr>().unwrap())
         .await
         .unwrap();
     for index in 0..30 {
@@ -150,8 +154,8 @@ async fn peer_addresses_get_independent_rate_buckets_and_forwarded_ip_is_ignored
             r#"{"redirect_uris":["https://client.test/callback"]}"#,
         ))
         .unwrap();
-    assert_ne!(
-        peer_two.call(request).await.unwrap().status(),
+    assert_eq!(
+        same_ip_different_port.call(request).await.unwrap().status(),
         StatusCode::TOO_MANY_REQUESTS
     );
     let request = Request::builder()
@@ -163,8 +167,8 @@ async fn peer_addresses_get_independent_rate_buckets_and_forwarded_ip_is_ignored
             r#"{"redirect_uris":["https://client.test/callback"]}"#,
         ))
         .unwrap();
-    assert_eq!(
-        peer_one.call(request).await.unwrap().status(),
+    assert_ne!(
+        distinct_ip.call(request).await.unwrap().status(),
         StatusCode::TOO_MANY_REQUESTS
     );
 }
