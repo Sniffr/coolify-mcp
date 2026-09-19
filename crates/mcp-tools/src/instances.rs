@@ -35,6 +35,8 @@ pub enum InstanceRegistryError {
     Invalid,
     #[error("unknown instance name")]
     Unknown,
+    #[error("duplicate instance name")]
+    Duplicate,
     #[error("could not create instance client")]
     Client,
 }
@@ -87,12 +89,22 @@ impl InstanceRegistry {
             return Err(InstanceRegistryError::Invalid);
         }
         let mut entries = Vec::with_capacity(values.len());
+        let mut names = std::collections::HashSet::new();
         for value in values {
             if value.name.trim().is_empty() || value.token.is_empty() {
                 return Err(InstanceRegistryError::Invalid);
             }
+            if !names.insert(value.name.clone()) {
+                return Err(InstanceRegistryError::Duplicate);
+            }
             let url = Url::parse(&value.url).map_err(|_| InstanceRegistryError::Invalid)?;
-            if !matches!(url.scheme(), "http" | "https") {
+            if !matches!(url.scheme(), "http" | "https")
+                || url.username() != ""
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+                || url.host_str().is_none()
+            {
                 return Err(InstanceRegistryError::Invalid);
             }
             let env = HashMap::from([(String::from("COOLIFY_ACCESS_TOKEN"), value.token)]);

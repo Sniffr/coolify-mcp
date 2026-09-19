@@ -27,3 +27,9 @@ Implemented fleet routing foundations, prompts, resources, and documentation sea
 - Task 6 fix round 1 wires the registry into `ToolContext`: `list_instances` is rejected with `MCP_UNSUPPORTED` without a fleet registry, projects configured names/base URLs/default metadata, and normal fleet calls select a client per request.
 - Resource resolution/read operations now support concrete application URIs and overview reads with bounded untrusted framing.
 - `search_docs` now uses the embedded search engine and never calls the caller-selected `/docs` endpoint.
+
+## Fix round 2
+
+- Fleet URLs now reject userinfo, query, fragment, non-http(s), and hostless forms; safe projections only expose normalized base URLs.
+- Duplicate names are rejected deterministically with the safe `duplicate instance name` error.
+- Added concurrent fake-server routing coverage proving two selected calls reach only their respective server counters and responses.
