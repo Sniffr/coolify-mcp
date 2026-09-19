@@ -19,5 +19,5 @@ pub fn schema_for(_name: &str, fleet: bool) -> Value {
     if fleet {
         properties["instance"] = json!({"type":"string","description":"Instance name"});
     }
-    json!({"type":"object","properties":properties,"additionalProperties":true})
+    json!({"type":"object","properties":properties,"additionalProperties":false})
 }

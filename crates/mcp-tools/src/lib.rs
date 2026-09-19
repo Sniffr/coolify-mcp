@@ -19,8 +19,13 @@ pub struct ToolResult {
 }
 impl ToolResult {
     fn ok(v: Value) -> Self {
+        let mut envelope = json!({"data":v});
+        let encoded = serde_json::to_string(&envelope).unwrap_or_default();
+        if encoded.len() > 200_000 {
+            envelope = json!({"data":{"truncated":true,"preview":encoded.chars().take(199_000).collect::<String>()},"_actions":[]});
+        }
         Self {
-            text: serde_json::to_string(&json!({"data":v})).unwrap(),
+            text: serde_json::to_string(&envelope).unwrap(),
             is_error: false,
         }
     }
@@ -241,19 +246,42 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
                     .map(|v| json!({"logs":v.chars().take(200000).collect::<String>()}))
                     .map_err(api),
                 Some("cancel") => c.cancel_deployment(u).await.map(|v| json!(v)).map_err(api),
-                Some("wait") => c
-                    .poll_deployment(
-                        u,
-                        std::time::Duration::from_secs(5),
-                        std::time::Duration::from_secs(
-                            a.get("timeout_seconds")
-                                .and_then(Value::as_u64)
-                                .unwrap_or(300),
-                        ),
-                    )
-                    .await
-                    .map(|v| json!(v))
-                    .map_err(api),
+                Some("wait") => {
+                    let v = c
+                        .poll_deployment(
+                            u,
+                            std::time::Duration::from_secs(5),
+                            std::time::Duration::from_secs(
+                                a.get("timeout_seconds")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(300)
+                                    .min(300),
+                            ),
+                        )
+                        .await
+                        .map_err(api)?;
+                    let status = v.status.to_ascii_lowercase();
+                    let terminal = matches!(status.as_str(), "finished" | "failed" | "cancelled");
+                    let mut out = json!({"status":v.status,"deployment_uuid":v.deployment_uuid,"application_uuid":v.uuid,"timed_out":!terminal});
+                    if status == "failed"
+                        && let Ok(logs) = c.deployment_logs(u).await
+                    {
+                        out["logs_tail"] = Value::String(
+                            logs.chars()
+                                .rev()
+                                .take(20_000)
+                                .collect::<String>()
+                                .chars()
+                                .rev()
+                                .collect(),
+                        );
+                    }
+                    if !terminal {
+                        out["next_action"] =
+                            json!({"tool":"deployment","args":{"uuid":u,"action":"wait"}});
+                    }
+                    Ok(out)
+                }
                 _ => c.get_deployment(u).await.map(|v| json!(v)).map_err(api),
             }
         }
@@ -375,13 +403,91 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
             .await
             .map(|v| json!(v))
             .map_err(api),
-        _ => generic(c, &format!("/{}", n.replace('_', "-")), a).await,
+        _ => Err(ToolResult::err("tool is not registered")),
     }
 }
+fn registered(name: &str) -> bool {
+    DEFAULT_TOOL_ROSTER.iter().any(|t| t.name == name)
+}
+fn validate_input(name: &str, args: &Value) -> Result<(), ToolResult> {
+    let Some(obj) = args.as_object() else {
+        return Err(ToolResult::err("arguments must be an object"));
+    };
+    let common = [
+        "uuid",
+        "id",
+        "action",
+        "method",
+        "body",
+        "input",
+        "page",
+        "per_page",
+        "lines",
+        "wait",
+        "timeout_seconds",
+        "storage_uuid",
+        "tag_uuid",
+        "backup_uuid",
+        "query",
+        "instance",
+    ];
+    if let Some(k) = obj.keys().find(|k| !common.contains(&k.as_str())) {
+        return Err(ToolResult::err(format!("unknown argument '{k}'")));
+    }
+    if let Some(m) = obj.get("method").and_then(Value::as_str)
+        && !matches!(m, "GET" | "POST" | "PATCH" | "DELETE")
+    {
+        return Err(ToolResult::err("method is not allowed"));
+    }
+    let allowed = match name {
+        "application" => &[
+            "get", "create", "update", "delete", "start", "stop", "restart", "move", "migrate",
+            "rollback",
+        ][..],
+        "database" => &[
+            "get", "create", "update", "delete", "start", "stop", "restart", "move", "migrate",
+        ][..],
+        "service" => &[
+            "get", "create", "update", "delete", "start", "stop", "restart",
+        ][..],
+        "deployment" => &["get", "logs", "cancel", "wait"][..],
+        "projects" => &["list", "get", "create", "update", "delete"][..],
+        "control" => &["start", "stop", "restart"][..],
+        "system" => &["enable", "disable", "restart"][..],
+        _ => &[][..],
+    };
+    if let Some(a) = obj.get("action").and_then(Value::as_str)
+        && !allowed.contains(&a)
+    {
+        return Err(ToolResult::err("unknown action for tool"));
+    }
+    if obj
+        .get("per_page")
+        .and_then(Value::as_u64)
+        .is_some_and(|v| !(1..=100).contains(&v))
+    {
+        return Err(ToolResult::err("per_page must be between 1 and 100"));
+    }
+    Ok(())
+}
 pub async fn call_tool(ctx: ToolContext, name: &str, args: Value) -> ToolResult {
+    let finish = |result: ToolResult| {
+        if let Some(a) = ctx.audit.as_ref() {
+            a.record(name, if result.is_error { "error" } else { "ok" });
+        }
+        result
+    };
+    if !registered(name) {
+        return finish(ToolResult::err("tool is not registered"));
+    }
+    if let Err(e) = validate_input(name, &args) {
+        return finish(e);
+    }
     let act = action(name, &args);
     if !allows(ctx.policy, act) {
-        return ToolResult::err("tool is not permitted by the active capability profile");
+        return finish(ToolResult::err(
+            "tool is not permitted by the active capability profile",
+        ));
     }
     if matches!(act, Action::Write | Action::Delete | Action::Deploy)
         && ctx
@@ -390,21 +496,19 @@ pub async fn call_tool(ctx: ToolContext, name: &str, args: Value) -> ToolResult 
             .and_then(Value::as_bool)
             != Some(true)
     {
-        return ToolResult::err("confirmation required for this action");
+        return finish(ToolResult::err("confirmation required for this action"));
     }
     if let Some(i) = args.get("instance").and_then(Value::as_str)
         && ctx.instance.as_deref() != Some(i)
     {
-        return ToolResult::err("unknown instance name");
+        return finish(ToolResult::err("unknown instance name"));
     }
-    let r = dispatch(&ctx.client, name, &args)
-        .await
-        .map(ToolResult::ok)
-        .unwrap_or_else(|e| e);
-    if let Some(a) = ctx.audit {
-        a.record(name, if r.is_error { "error" } else { "ok" })
-    }
-    r
+    finish(
+        dispatch(&ctx.client, name, &args)
+            .await
+            .map(ToolResult::ok)
+            .unwrap_or_else(|e| e),
+    )
 }
 pub trait McpApplication: Send + Sync {
     fn tools(&self) -> Vec<ToolSpec>;

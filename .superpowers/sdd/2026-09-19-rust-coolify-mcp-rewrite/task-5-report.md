@@ -1,13 +1,18 @@
 
-## Continuation 2
+## Fix round 1 continuation
 
-Removed all unsupported-handler branches from the public 45-tool dispatch. Added the sanitized typed `CoolifyClient::request_value` boundary for action-specific projections and implemented real route-backed dispatch for configuration/private keys/cloud tokens/GitHub/Hetzner/teams/scheduled tasks/docs/diagnostics, server child resources, backups, tags/storages, control, bulk environment updates, emergency stop, project redeploy/restart, and all remaining grouped application/database/service/deployment actions. Added deployment wait routing through bounded client polling and preserved log bounds and API sanitation. Fleet-only `list_instances` remains excluded.
+Addressed review findings:
+- Removed the generic public dispatch fallback; unregistered tools fail before API access.
+- Added closed common-argument validation, per-group action allowlists, method validation, bounded `per_page`, and audit emission for rejected calls.
+- Added bounded success envelopes (200KB), structured bounded deployment wait projections with terminal status handling, timeout `timed_out` plus `next_action`, and bounded failed deployment log tails.
+- Changed schemas to reject unknown top-level properties and added independent exact-45 fixture coverage.
+- Replaced empty handler files with explicit domain ownership/validation functions.
+- Preserved centralized API sanitation through `request_value` and encoded child route methods.
 
-Verification completed:
-- `cargo test -p mcp-tools` — passed (4 tests)
+Verification:
+- `cargo test -p mcp-tools` — passed (5 tests)
 - `cargo test --workspace` — passed
 - `cargo fmt --all` — passed
 - `cargo clippy --workspace --all-targets -- -D warnings` — passed
-- `grep unsupported/not_implemented crates/mcp-tools/src` — no matches
 
-Concern: endpoint families without dedicated upstream response structs use the centralized sanitized `request_value` boundary; route construction, authorization, status/error handling, and body bounds remain in coolify-api rather than handlers.
+Remaining concern: schemas currently model the shared closed argument envelope rather than generating distinct serde-derived schemas for every action variant; arbitrary endpoint request payloads remain confined to the `body` field and are sanitized at the API boundary.
