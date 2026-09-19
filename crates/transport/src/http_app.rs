@@ -2,7 +2,7 @@ use crate::http::HttpConfig;
 use axum::{
     Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, Extension, Query, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Redirect, Response},
     routing::{get, post},
@@ -78,7 +78,9 @@ impl McpApplication for EmptyApp {
     }
 }
 pub fn router(config: HttpConfig) -> Router {
-    router_with_app(config, EmptyApp)
+    router_with_app(config, EmptyApp).layer(axum::Extension(ConnectInfo(
+        "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+    )))
 }
 pub fn router_with_app<A: McpApplication + 'static>(config: HttpConfig, app: A) -> Router {
     let state = AppState {
@@ -136,7 +138,7 @@ fn client_key(s: &AppState, headers: &HeaderMap, peer: Option<SocketAddr>) -> St
     {
         return value.chars().take(128).collect();
     }
-    peer.map(|address| address.ip().to_string())
+    peer.map(|address| address.to_string())
         .unwrap_or_else(|| "unknown-peer".into())
 }
 fn limited(s: &AppState, headers: &HeaderMap, peer: Option<SocketAddr>, endpoint: &str) -> bool {
@@ -146,10 +148,10 @@ fn limited(s: &AppState, headers: &HeaderMap, peer: Option<SocketAddr>, endpoint
 async fn register(
     State(s): State<AppState>,
     headers: HeaderMap,
-    peer: Option<Extension<SocketAddr>>,
+    peer: ConnectInfo<SocketAddr>,
     Json(req): Json<RegistrationRequest>,
 ) -> Response {
-    if !limited(&s, &headers, peer.map(|p| p.0), "register") {
+    if !limited(&s, &headers, Some(peer.0), "register") {
         return rate_error();
     }
     match s.config.oauth.register(req) {
@@ -174,10 +176,10 @@ struct AuthorizeQuery {
 async fn authorize(
     State(s): State<AppState>,
     headers: HeaderMap,
-    peer: Option<Extension<SocketAddr>>,
+    peer: ConnectInfo<SocketAddr>,
     Query(q): Query<AuthorizeQuery>,
 ) -> Response {
-    if !limited(&s, &headers, peer.map(|p| p.0), "authorize") {
+    if !limited(&s, &headers, Some(peer.0), "authorize") {
         return rate_error();
     }
     let req = AuthorizeRequest {
@@ -216,10 +218,10 @@ struct TokenForm {
 async fn token(
     State(s): State<AppState>,
     headers: HeaderMap,
-    peer: Option<Extension<SocketAddr>>,
+    peer: ConnectInfo<SocketAddr>,
     axum::extract::Form(f): axum::extract::Form<TokenForm>,
 ) -> Response {
-    if !limited(&s, &headers, peer.map(|p| p.0), "token") {
+    if !limited(&s, &headers, Some(peer.0), "token") {
         return rate_error();
     }
     let req = TokenRequest {

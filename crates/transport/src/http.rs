@@ -75,17 +75,36 @@ pub enum TransportError {
     #[error("invalid public URL: {0}")]
     Url(#[from] UrlError),
 }
+pub const HTTP2_SUPPORTED: bool = false;
+pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        tokio::select! {_=tokio::signal::ctrl_c()=>{},_=term.recv()=>{}}
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
 pub async fn run_http<A: mcp_tools::McpApplication + 'static>(
     app: A,
     config: HttpConfig,
 ) -> Result<(), TransportError> {
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     let router = crate::http_app::router_with_app(config.clone(), app);
-    let mut shutdown = Box::pin(async {
-        let _ = tokio::signal::ctrl_c().await;
-    });
+    let mut shutdown = Box::pin(shutdown_signal());
+    let mut connections = tokio::task::JoinSet::new();
     loop {
-        tokio::select! {_=&mut shutdown=>break,accepted=listener.accept()=>{let (stream,peer)=accepted?;let mut make=router.clone().into_make_service_with_connect_info::<SocketAddr>();let service=match make.call(peer).await{Ok(s)=>s,Err(_)=>continue};let timeout=config.header_timeout;tokio::spawn(async move{let io=hyper_util::rt::TokioIo::new(stream);let mut builder=hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());builder.http1().header_read_timeout(timeout);let _=builder.serve_connection_with_upgrades(io,hyper_util::service::TowerToHyperService::new(service)).await;});}}
+        tokio::select! {_=&mut shutdown=>break,Some(_)=connections.join_next(),if !connections.is_empty()=>{},accepted=listener.accept()=>{let (stream,peer)=accepted?;let mut make=router.clone().into_make_service_with_connect_info::<SocketAddr>();let service=match make.call(peer).await{Ok(s)=>s,Err(_)=>continue};let timeout=config.header_timeout;connections.spawn(async move{let io=hyper_util::rt::TokioIo::new(stream);let mut builder=hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new()).http1_only();builder.http1().header_read_timeout(timeout);let _=builder.serve_connection_with_upgrades(io,hyper_util::service::TowerToHyperService::new(service)).await;});}}
+    }
+    let drain = async { while connections.join_next().await.is_some() {} };
+    let _ = tokio::time::timeout(DRAIN_TIMEOUT, drain).await;
+    if !connections.is_empty() {
+        connections.abort_all();
+        while connections.join_next().await.is_some() {}
     }
     if config.oauth.flush().is_err() {
         config.persistence_health.store(false, Ordering::Release);

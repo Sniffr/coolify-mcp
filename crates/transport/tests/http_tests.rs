@@ -2,12 +2,35 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use tower::ServiceExt;
-use transport::http::{HttpConfig, normalize_public_url};
-use transport::http_app::router;
+use std::net::SocketAddr;
+use tower::{Service, ServiceExt};
+use transport::http::{DRAIN_TIMEOUT, HTTP2_SUPPORTED, HttpConfig, normalize_public_url};
+use transport::http_app::{router, router_with_app};
+const _: () = assert!(!HTTP2_SUPPORTED);
+
+struct TestApp;
+impl mcp_tools::McpApplication for TestApp {
+    fn tools(&self) -> Vec<mcp_tools::ToolSpec> {
+        Vec::new()
+    }
+    fn call<'a>(
+        &'a self,
+        _: &'a str,
+        _: serde_json::Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = mcp_tools::ToolResult> + Send + 'a>>
+    {
+        Box::pin(async {
+            mcp_tools::ToolResult {
+                text: String::new(),
+                is_error: false,
+            }
+        })
+    }
+}
 
 #[test]
 fn timeout_configuration_keeps_header_and_request_deadlines_distinct() {
+    assert_eq!(DRAIN_TIMEOUT, std::time::Duration::from_secs(30));
     let config = HttpConfig::for_tests();
     assert_eq!(config.header_timeout, std::time::Duration::from_secs(15));
     assert_eq!(config.request_timeout, std::time::Duration::from_secs(30));
@@ -89,6 +112,61 @@ async fn oauth_mutation_endpoints_rate_limit_by_client_ip() {
         }
     }
     assert!(limited);
+}
+
+#[tokio::test]
+async fn peer_addresses_get_independent_rate_buckets_and_forwarded_ip_is_ignored() {
+    let app = router_with_app(HttpConfig::for_tests(), TestApp);
+    let mut make = app.into_make_service_with_connect_info::<SocketAddr>();
+    let mut peer_one = make
+        .call("127.0.0.1:10001".parse::<SocketAddr>().unwrap())
+        .await
+        .unwrap();
+    let mut peer_two = make
+        .call("127.0.0.1:10002".parse::<SocketAddr>().unwrap())
+        .await
+        .unwrap();
+    for index in 0..30 {
+        let request = Request::builder()
+            .uri("/oauth/register")
+            .method("POST")
+            .header("content-type", "application/json")
+            .header("x-forwarded-for", format!("203.0.113.{index}"))
+            .body(Body::from(
+                r#"{"redirect_uris":["https://client.test/callback"]}"#,
+            ))
+            .unwrap();
+        assert_ne!(
+            peer_one.call(request).await.unwrap().status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+    let request = Request::builder()
+        .uri("/oauth/register")
+        .method("POST")
+        .header("content-type", "application/json")
+        .header("x-forwarded-for", "198.51.100.77")
+        .body(Body::from(
+            r#"{"redirect_uris":["https://client.test/callback"]}"#,
+        ))
+        .unwrap();
+    assert_ne!(
+        peer_two.call(request).await.unwrap().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    let request = Request::builder()
+        .uri("/oauth/register")
+        .method("POST")
+        .header("content-type", "application/json")
+        .header("x-forwarded-for", "198.51.100.78")
+        .body(Body::from(
+            r#"{"redirect_uris":["https://client.test/callback"]}"#,
+        ))
+        .unwrap();
+    assert_eq!(
+        peer_one.call(request).await.unwrap().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
 }
 
 #[tokio::test]

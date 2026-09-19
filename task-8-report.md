@@ -58,3 +58,18 @@ Fix-round 2 verification:
 - `cargo test --workspace` — passed.
 - `cargo clippy --workspace --all-targets -- -D warnings` — passed.
 - `cargo fmt --all` — completed.
+
+## Fix round 3 — 2026-09-19
+
+Addressed the remaining transport findings:
+
+- HTTP handlers now extract `ConnectInfo<SocketAddr>` directly. The production connection service supplies the accepted peer address, while the test-only `router` helper supplies a deterministic local peer. Rate-limit keys use the complete accepted `SocketAddr`; forwarded headers remain ignored unless trusted-proxy mode is explicitly enabled. Added a server-style test with two independent peer buckets and spoofed forwarded headers.
+- HTTP/2 is explicitly disabled (`HTTP2_SUPPORTED == false`) in the Hyper connection builder. The 15-second Hyper HTTP/1 header-read deadline therefore applies to every supported protocol; the configuration test asserts the enforcement choice.
+- Added SIGTERM handling on Unix alongside Ctrl-C, stopped accepting connections on shutdown, tracked connection tasks in `JoinSet`, drained them for up to the bounded 30-second `DRAIN_TIMEOUT`, and aborted any remaining tasks before flushing OAuth state.
+
+Fix-round 3 verification:
+
+- `cargo test -p transport` — passed (12 transport tests).
+- `cargo test --workspace` — passed.
+- `cargo clippy --workspace --all-targets -- -D warnings` — passed.
+- `cargo fmt --all` — completed.
