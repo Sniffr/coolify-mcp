@@ -1,0 +1,26 @@
+[package]
+name = "sniffr-coolify-mcp"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = [
+    "crates/coolify-api",
+    "crates/safety",
+    "crates/oauth",
+    "crates/transport",
+    "crates/mcp-tools",
+    "crates/doctor",
+]
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+coolify-api = { path = "crates/coolify-api" }
+safety = { path = "crates/safety" }
+oauth = { path = "crates/oauth" }
+transport = { path = "crates/transport" }
+mcp-tools = { path = "crates/mcp-tools" }
+doctor = { path = "crates/doctor" }
