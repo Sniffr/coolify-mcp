@@ -1,11 +1,26 @@
 //! Typed Coolify API client foundation.
 
+pub mod api_shape;
 mod client;
+pub mod compatibility;
 mod config;
 mod error;
+pub mod models;
+pub mod resources;
 mod token_source;
 
+pub use api_shape::{pagination_query, unwrap_logs};
 pub use client::CoolifyClient;
+pub use compatibility::{LegacyEndpoint, error_hint};
 pub use config::{ConfigError, CoolifyConfig, config_from_env};
 pub use error::{CoolifyApiError, HttpErrorDetails, MAX_BODY_BYTES};
+pub use models::{
+    ApplicationSummary, DatabaseSummary, DeploymentSummary, EnvironmentVariable, ProjectSummary,
+    ServerSummary, ServiceSummary,
+};
 pub use token_source::{TokenSource, TokenSourceError};
+pub fn is_running_status(status: Option<&str>) -> bool {
+    let Some(status) = status else { return false };
+    let lower = status.to_ascii_lowercase();
+    lower.starts_with("running") || (lower.contains("healthy") && !lower.contains("unhealthy"))
+}

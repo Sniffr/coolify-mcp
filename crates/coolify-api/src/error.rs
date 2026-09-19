@@ -107,6 +107,20 @@ impl CoolifyApiError {
             retry_after: details.retry_after,
         }
     }
+    pub(crate) fn is_method_or_routing(&self, _path: &str) -> bool {
+        match self {
+            Self::Http { status, body, .. } => {
+                *status == 405 || crate::api_shape::is_routing_catch_all(*status, body)
+            }
+            _ => false,
+        }
+    }
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            Self::Http { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
     pub fn retry_after(&self) -> Option<&str> {
         match self {
             Self::Http { retry_after, .. } => retry_after.as_deref(),

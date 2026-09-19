@@ -1,0 +1,28 @@
+use crate::{CoolifyApiError, CoolifyClient, ServerSummary};
+use reqwest::Method;
+impl CoolifyClient {
+    pub async fn list_servers(
+        &self,
+        page: u32,
+        per_page: u32,
+    ) -> Result<Vec<ServerSummary>, CoolifyApiError> {
+        self.request_json(
+            Method::GET,
+            &format!("/servers?page={page}&per_page={per_page}"),
+            None,
+        )
+        .await
+    }
+    pub async fn get_server(&self, uuid: &str) -> Result<ServerSummary, CoolifyApiError> {
+        self.request_json(Method::GET, &format!("/servers/{uuid}"), None)
+            .await
+    }
+    pub async fn validate_server(&self, uuid: &str) -> Result<serde_json::Value, CoolifyApiError> {
+        self.post_with_legacy_get_fallback(
+            crate::LegacyEndpoint::ServersValidate,
+            &format!("/servers/{uuid}/validate"),
+            None,
+        )
+        .await
+    }
+}

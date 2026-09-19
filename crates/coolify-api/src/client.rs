@@ -6,10 +6,13 @@ use reqwest::{
 use safety::sanitize_text;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 pub struct CoolifyClient {
-    client: Client,
-    config: CoolifyConfig,
+    pub(crate) client: Client,
+    pub(crate) config: CoolifyConfig,
+    pub(crate) legacy_methods: Mutex<HashMap<String, bool>>,
 }
 impl std::fmt::Debug for CoolifyClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -24,7 +27,19 @@ impl CoolifyClient {
             .timeout(config.timeout)
             .build()
             .map_err(|e| CoolifyApiError::Transport(e.to_string()))?;
-        Ok(Self { client, config })
+        Ok(Self {
+            client,
+            config,
+            legacy_methods: Mutex::new(HashMap::new()),
+        })
+    }
+    pub async fn post_with_legacy_get_fallback<T: DeserializeOwned>(
+        &self,
+        key: crate::LegacyEndpoint,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<T, CoolifyApiError> {
+        crate::compatibility::post_fallback(self, key, path, body).await
     }
     pub async fn request_json<T: DeserializeOwned>(
         &self,
