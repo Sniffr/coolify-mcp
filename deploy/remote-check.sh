@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BASE_URL="https://mcp.social.dpdns.org"
+forbidden='COOLIFY_ACCESS_TOKEN|COOLIFY_TOKEN|Authorization:[[:space:]]*Bearer|fixture-token|password|secret'
+
+fetch() {
+  local path="$1"
+  local out
+  out="$(mktemp)"
+  trap 'rm -f "$out"' RETURN
+  curl --fail --silent --show-error --max-time 20 --proto '=https' --tlsv1.2 \
+    "$BASE_URL$path" >"$out"
+  if grep -Eiq "$forbidden" "$out"; then
+    echo "FAIL $path: response contains a forbidden credential-like value" >&2
+    return 1
+  fi
+  cat "$out"
+}
+
+health="$(fetch /healthz)"
+if [[ "$health" != *'ok'* ]]; then
+  echo "FAIL /healthz: expected an ok health response" >&2
+  exit 1
+fi
+
+auth_resource="$(fetch /.well-known/oauth-protected-resource)"
+if [[ "$auth_resource" != *'/mcp'* ]]; then
+  echo "FAIL protected-resource discovery: expected an /mcp resource" >&2
+  exit 1
+fi
+
+auth_server="$(fetch /.well-known/oauth-authorization-server)"
+if [[ "$auth_server" != *'https://mcp.social.dpdns.org'* ]]; then
+  echo "FAIL authorization-server discovery: expected the public issuer" >&2
+  exit 1
+fi
+
+echo "remote health and OAuth discovery checks passed for $BASE_URL"
