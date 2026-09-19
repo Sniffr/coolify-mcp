@@ -56,6 +56,10 @@ impl<W: Write> AuditLogger<W> {
         }
     }
 
+    /// Records one JSON line. The canonical payload is serde's deterministic
+    /// struct-field JSON order, and the digest input is the UTF-8 bytes of the
+    /// previous lowercase hexadecimal digest followed by those payload bytes.
+    /// Request and response values are absent from `AuditEvent` by construction.
     pub fn record(&mut self, event: AuditEvent) -> io::Result<String> {
         let canonical = serde_json::to_vec(&event).map_err(io::Error::other)?;
         let mut hasher = Sha256::new();

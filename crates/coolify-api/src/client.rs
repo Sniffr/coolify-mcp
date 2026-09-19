@@ -3,6 +3,7 @@ use reqwest::{
     Client, Method,
     header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
+use safety::sanitize_text;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -57,7 +58,7 @@ impl CoolifyClient {
         let bytes = read_bounded(self.send(method, path, None).await?)
             .await
             .map_err(|e| CoolifyApiError::Transport(e.to_string()))?;
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
+        Ok(sanitize_text(&String::from_utf8_lossy(&bytes)))
     }
     pub async fn get_version(&self) -> Result<String, CoolifyApiError> {
         self.request_text(Method::GET, "/version")

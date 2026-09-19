@@ -38,6 +38,37 @@ fn audit_chain_links_events_and_hash_changes_with_event_fields() {
 }
 
 #[test]
+fn changing_previous_hash_changes_digest() {
+    let mut first_output = Cursor::new(Vec::new());
+    let mut first_logger = AuditLogger::new(&mut first_output);
+    first_logger.record(event("now", "tool")).unwrap();
+    let first = first_logger.record(event("later", "tool")).unwrap();
+
+    let mut second_output = Cursor::new(Vec::new());
+    let mut second_logger = AuditLogger::new(&mut second_output);
+    second_logger.record(event("different", "tool")).unwrap();
+    let second = second_logger.record(event("later", "tool")).unwrap();
+    assert_ne!(first, second);
+}
+
+#[test]
+fn changing_tool_outcome_or_timestamp_changes_digest() {
+    fn digest(timestamp: &str, tool: &str, outcome: &str) -> String {
+        let mut output = Cursor::new(Vec::new());
+        let mut logger = AuditLogger::new(&mut output);
+        logger
+            .record(AuditEvent::new(
+                timestamp, None, tool, "resource", outcome, 200, 1,
+            ))
+            .unwrap()
+    }
+    let baseline = digest("t1", "tool-a", "success");
+    assert_ne!(baseline, digest("t2", "tool-a", "success"));
+    assert_ne!(baseline, digest("t1", "tool-b", "success"));
+    assert_ne!(baseline, digest("t1", "tool-a", "failure"));
+}
+
+#[test]
 fn audit_output_contains_identifiers_but_not_secret_values() {
     let mut output = Cursor::new(Vec::new());
     let mut logger = AuditLogger::new(&mut output);

@@ -182,3 +182,39 @@ async fn client_bounds_multibyte_text_response() {
     assert!(matches!(error, CoolifyApiError::Decode(_)));
     handle.join().unwrap();
 }
+
+#[tokio::test]
+async fn client_sanitizes_sensitive_json_at_api_boundary() {
+    let (url, handle) = server(
+        200,
+        "application/json",
+        r#"{"password":"json-secret","metadata":{"label":"safe"},"environment_variables":[{"key":"TOKEN","value":"env-secret","enabled":true}]}"#,
+        "",
+    );
+    let value: serde_json::Value = client_for(&url, "token", HeaderMap::new())
+        .request_json(Method::GET, "/test", None)
+        .await
+        .unwrap();
+    assert_eq!(value["password"], "***");
+    assert_eq!(value["metadata"]["label"], "safe");
+    assert_eq!(value["environment_variables"][0]["value"], "***");
+    assert_eq!(value["environment_variables"][0]["enabled"], true);
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn client_sanitizes_sensitive_text_at_api_boundary() {
+    let (url, handle) = server(
+        200,
+        "text/plain",
+        "version 4.3 password=text-secret internal_db_url=postgres://u:p@db",
+        "",
+    );
+    let text = client_for(&url, "token", HeaderMap::new())
+        .request_text(Method::GET, "/version")
+        .await
+        .unwrap();
+    assert_eq!(text, "version 4.3 password=*** internal_db_url=***");
+    assert!(!text.contains("text-secret"));
+    handle.join().unwrap();
+}
