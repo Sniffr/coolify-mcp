@@ -41,6 +41,23 @@ impl CoolifyClient {
     ) -> Result<T, CoolifyApiError> {
         crate::compatibility::post_fallback(self, key, path, body).await
     }
+    /// Typed escape hatch for endpoint families whose response projection is action-specific.
+    /// URL construction, auth, status handling, bounds, and sanitization remain centralized here.
+    pub async fn request_value(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Value, CoolifyApiError> {
+        let response = self.send(method, path, body).await?;
+        let bytes = read_bounded(response)
+            .await
+            .map_err(|e| CoolifyApiError::Decode(e.to_string()))?;
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(|e| CoolifyApiError::Decode(e.to_string()))?;
+        Ok(safety::sanitize_json(&value, false))
+    }
+
     pub async fn request_json<T: DeserializeOwned>(
         &self,
         method: Method,
