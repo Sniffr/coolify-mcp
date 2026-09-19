@@ -51,6 +51,7 @@ fn typed_body(a: &Value) -> Option<Value> {
     let o = a.as_object()?;
     let mut out = serde_json::Map::new();
     for key in [
+        "environment_name",
         "name",
         "type",
         "fqdn",
@@ -384,11 +385,21 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
                 .map_err(api),
             _ => c.list_projects().await.map(|v| json!(v)).map_err(api),
         },
-        "environments" => c
-            .project_environments(id(a, "uuid")?)
+        "environments" => {
+            let project = seg(id(a, "uuid")?);
+            let suffix = a
+                .get("environment_name")
+                .and_then(Value::as_str)
+                .map(|v| format!("/{}", seg(v)))
+                .unwrap_or_default();
+            c.request_value(
+                fixed_method(n, a.get("action").and_then(Value::as_str)),
+                &format!("/projects/{}/environments{}", project, suffix),
+                typed_body(a),
+            )
             .await
-            .map(|v| json!(v))
-            .map_err(api),
+            .map_err(api)
+        }
         "env_vars" => c
             .request_value(
                 fixed_method(n, a.get("action").and_then(Value::as_str)),
@@ -501,6 +512,7 @@ fn validate_input(name: &str, args: &Value) -> Result<Value, ToolResult> {
         "backup_uuid",
         "query",
         "instance",
+        "environment_name",
         "name",
         "type",
         "fqdn",
@@ -587,6 +599,15 @@ fn validate_input(name: &str, args: &Value) -> Result<Value, ToolResult> {
     }
     serde_json::to_value(typed).map_err(|_| ToolResult::err("typed argument encoding failed"))
 }
+fn with_pagination(mut result: ToolResult, page: u32, per_page: u32) -> ToolResult {
+    if let Ok(mut v) = serde_json::from_str::<Value>(&result.text)
+        && v["data"].is_array()
+    {
+        v["_pagination"] = json!({"page":page,"per_page":per_page});
+        result.text = serde_json::to_string(&v).unwrap_or(result.text);
+    }
+    result
+}
 pub async fn call_tool(ctx: ToolContext, name: &str, args: Value) -> ToolResult {
     let finish = |result: ToolResult| {
         if let Some(a) = ctx.audit.as_ref() {
@@ -621,12 +642,22 @@ pub async fn call_tool(ctx: ToolContext, name: &str, args: Value) -> ToolResult 
     {
         return finish(ToolResult::err("unknown instance name"));
     }
-    finish(
-        dispatch(&ctx.client, name, &typed_args)
-            .await
-            .map(ToolResult::ok)
-            .unwrap_or_else(|e| e),
-    )
+    let result = dispatch(&ctx.client, name, &typed_args)
+        .await
+        .map(ToolResult::ok)
+        .unwrap_or_else(|e| e);
+    if !result.is_error {
+        return finish(with_pagination(
+            result,
+            typed_args.get("page").and_then(Value::as_u64).unwrap_or(1) as u32,
+            typed_args
+                .get("per_page")
+                .and_then(Value::as_u64)
+                .unwrap_or(50)
+                .clamp(1, 100) as u32,
+        ));
+    }
+    finish(result)
 }
 pub trait McpApplication: Send + Sync {
     fn tools(&self) -> Vec<ToolSpec>;

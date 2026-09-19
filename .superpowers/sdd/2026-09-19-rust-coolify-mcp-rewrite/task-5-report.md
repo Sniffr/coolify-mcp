@@ -1,10 +1,12 @@
 
-## Fix round 4 continuation
+## Fix round 5 continuation
 
-Made the closed serde input authoritative through dispatch: `call_tool` deserializes once into `CommonInput`, validates it, serializes only that typed value for dispatch, and no longer dispatches the raw caller object. Removed arbitrary body/input/method escapes; request bodies are built only from named typed fields. Expanded schemas with exact action enums and required action fields for all action-bearing groups and fixed-action tools. Success truncation now preserves `_actions` and `_pagination`, while structured errors remain stable JSON envelopes.
+Made serialized typed inputs presence-aware with `skip_serializing_if`, so request bodies contain only supplied fields. Pagination metadata is rewritten from validated typed page/per_page values and survives bounded truncation. Environments now dispatch explicit project-environment routes with fixed action-derived methods and typed environment names. Existing closed schemas and action contracts remain enforced.
 
 Verification:
-- `cargo test -p mcp-tools` — passed (6 tests)
+- `cargo test -p mcp-tools` — passed
 - `cargo test --workspace` — passed
 - `cargo fmt --all` — passed
 - `cargo clippy --workspace --all-targets -- -D warnings` — passed
+
+Concern: the repository's existing fake-server harness is concentrated in coolify-api; mcp-tools currently has contract/schema tests but not a new independent server fixture for every listed domain in this round.
