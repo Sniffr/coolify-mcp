@@ -2,7 +2,6 @@ use crate::{CoolifyApiError, CoolifyClient};
 use reqwest::Method;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::collections::HashMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LegacyEndpoint {
     ServersValidate,
@@ -80,6 +79,10 @@ pub fn error_hint(status: u16, path: &str) -> Option<&'static str> {
         None
     }
 }
-pub(crate) fn _map() -> HashMap<String, bool> {
-    HashMap::new()
+pub fn error_hint_with_body(status: u16, path: &str, body: &str) -> Option<&'static str> {
+    if status == 404 && (body.contains("Resource not found") || body.contains("UUID")) {
+        Some("verify the resource UUID belongs to this Coolify instance and team")
+    } else {
+        error_hint(status, path)
+    }
 }

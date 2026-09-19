@@ -1,7 +1,45 @@
 use coolify_api::{
-    ApplicationSummary, DatabaseSummary, DeploymentSummary, ServerSummary, is_running_status,
+    ApplicationSummary, CoolifyClient, DatabaseSummary, DeploymentSummary, ServerSummary,
+    config_from_env, is_running_status,
 };
 use serde_json::json;
+use std::{
+    collections::HashMap,
+    io::{Read, Write},
+    net::TcpListener,
+    sync::{Arc, Mutex},
+};
+
+#[tokio::test]
+async fn application_list_uses_encoded_pagination_and_summary_projection() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = Arc::new(Mutex::new(String::new()));
+    let out = Arc::clone(&seen);
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let n = stream.read(&mut buf).unwrap();
+        *out.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).to_string();
+        let body =
+            r#"[{"uuid":"a","name":"web","domains":["https://example.test"],"secret":"masked"}]"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+    });
+    let mut env = HashMap::new();
+    env.insert("COOLIFY_BASE_URL".into(), format!("http://{addr}"));
+    env.insert("COOLIFY_ACCESS_TOKEN".into(), "token".into());
+    let client = CoolifyClient::new(config_from_env(&env, false).unwrap()).unwrap();
+    let apps = client.list_applications(2, 50).await.unwrap();
+    assert_eq!(apps[0].fqdn.as_deref(), Some("https://example.test"));
+    let request = seen.lock().unwrap().clone();
+    assert!(request.starts_with("GET /api/v1/applications?page=2&per_page=50"));
+}
 
 #[test]
 fn projects_and_servers_are_bounded_summaries() {
@@ -28,8 +66,9 @@ fn logs_and_deployment_projection_are_bounded() {
     assert_eq!(coolify_api::unwrap_logs(json!("bare")), "bare");
     let deployment: DeploymentSummary = serde_json::from_value(json!({"uuid":"d","deployment_uuid":"dep","status":"running","created_at":"now","raw":"hidden"})).unwrap();
     assert_eq!(deployment.deployment_uuid, "dep");
-    assert!(is_running_status(Some("running:unhealthy")));
+    assert!(!is_running_status(Some("running:unhealthy")));
     assert!(!is_running_status(Some("exited:unhealthy")));
+    assert!(is_running_status(Some("running")));
 }
 
 #[test]

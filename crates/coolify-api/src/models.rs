@@ -92,7 +92,7 @@ pub struct ServiceSummary {
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
-    pub domains: Option<Value>,
+    pub domains: Option<Vec<String>>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeploymentSummary {

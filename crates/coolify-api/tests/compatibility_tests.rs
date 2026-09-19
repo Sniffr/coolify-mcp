@@ -1,4 +1,38 @@
-use coolify_api::{api_shape, error_hint};
+use coolify_api::{CoolifyClient, LegacyEndpoint, api_shape, config_from_env, error_hint};
+use std::{
+    collections::HashMap,
+    io::{Read, Write},
+    net::TcpListener,
+    sync::{Arc, Mutex},
+};
+
+fn fake_server(responses: Vec<(u16, &'static str)>) -> (String, Arc<Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let out = Arc::clone(&seen);
+    std::thread::spawn(move || {
+        for (status, body) in responses {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]);
+            out.lock()
+                .unwrap()
+                .push(request.lines().next().unwrap_or_default().to_string());
+            let reason = if status == 200 { "OK" } else { "ERR" };
+            write!(stream,"HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",body.len(),body).unwrap();
+        }
+    });
+    (format!("http://{}", addr), seen)
+}
+
+fn client_at(base: String) -> CoolifyClient {
+    let mut env = HashMap::new();
+    env.insert("COOLIFY_BASE_URL".into(), base);
+    env.insert("COOLIFY_ACCESS_TOKEN".into(), "token".into());
+    CoolifyClient::new(config_from_env(&env, false).unwrap()).unwrap()
+}
 
 #[test]
 fn routing_miss_is_body_based() {
@@ -18,6 +52,48 @@ fn routing_miss_is_body_based() {
         500,
         r#"{"message":"Not found."}"#
     ));
+}
+
+#[tokio::test]
+async fn fallback_caches_get_and_reprobes_after_cached_405() {
+    let (base, seen) = fake_server(vec![
+        (405, r#"{"message":"method"}"#),
+        (200, r#"{"ok":true}"#),
+        (405, r#"{"message":"method"}"#),
+        (200, r#"{"ok":true}"#),
+        (200, r#"{"ok":true}"#),
+    ]);
+    let client = client_at(base);
+    let _: serde_json::Value = client
+        .post_with_legacy_get_fallback(LegacyEndpoint::ServersValidate, "/servers/x/validate", None)
+        .await
+        .unwrap();
+    let _: serde_json::Value = client
+        .post_with_legacy_get_fallback(LegacyEndpoint::ServersValidate, "/servers/x/validate", None)
+        .await
+        .unwrap();
+    let requests = seen.lock().unwrap().clone();
+    assert!(requests[0].starts_with("POST /api/v1/servers/x/validate"));
+    assert!(requests[1].starts_with("GET /api/v1/servers/x/validate"));
+    assert!(requests[2].starts_with("GET /api/v1/servers/x/validate"));
+    assert!(requests[3].starts_with("POST /api/v1/servers/x/validate"));
+}
+
+#[tokio::test]
+async fn controller_errors_do_not_retry_mutation() {
+    for status in [404, 422, 500] {
+        let (base, seen) = fake_server(vec![(status, r#"{"message":"controller"}"#)]);
+        let client = client_at(base);
+        let result: Result<serde_json::Value, _> = client
+            .post_with_legacy_get_fallback(
+                LegacyEndpoint::ServersValidate,
+                "/servers/x/validate",
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
 }
 
 #[test]

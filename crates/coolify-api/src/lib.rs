@@ -7,11 +7,12 @@ mod config;
 mod error;
 pub mod models;
 pub mod resources;
+pub mod route_matrix;
 mod token_source;
 
 pub use api_shape::{pagination_query, unwrap_logs};
 pub use client::CoolifyClient;
-pub use compatibility::{LegacyEndpoint, error_hint};
+pub use compatibility::{LegacyEndpoint, error_hint, error_hint_with_body};
 pub use config::{ConfigError, CoolifyConfig, config_from_env};
 pub use error::{CoolifyApiError, HttpErrorDetails, MAX_BODY_BYTES};
 pub use models::{
@@ -22,5 +23,5 @@ pub use token_source::{TokenSource, TokenSourceError};
 pub fn is_running_status(status: Option<&str>) -> bool {
     let Some(status) = status else { return false };
     let lower = status.to_ascii_lowercase();
-    lower.starts_with("running") || (lower.contains("healthy") && !lower.contains("unhealthy"))
+    !lower.contains("unhealthy") && (lower.starts_with("running") || lower.contains("healthy"))
 }
