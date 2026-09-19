@@ -26,7 +26,7 @@ impl ToolResult {
         }
         let encoded = serde_json::to_string(&envelope).unwrap_or_default();
         if encoded.len() > 200_000 {
-            envelope = json!({"data":{"truncated":true,"preview":encoded.chars().take(199_000).collect::<String>()},"_actions":[]});
+            envelope["data"] = json!({"truncated":true,"preview":encoded.chars().take(199_000).collect::<String>()});
         }
         Self {
             text: serde_json::to_string(&envelope).unwrap(),
@@ -478,7 +478,7 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
 fn registered(name: &str) -> bool {
     DEFAULT_TOOL_ROSTER.iter().any(|t| t.name == name)
 }
-fn validate_input(name: &str, args: &Value) -> Result<(), ToolResult> {
+fn validate_input(name: &str, args: &Value) -> Result<Value, ToolResult> {
     let typed: CommonInput = serde_json::from_value(args.clone())
         .map_err(|_| ToolResult::err("invalid typed arguments"))?;
     if typed.instance.is_some() {
@@ -536,6 +536,10 @@ fn validate_input(name: &str, args: &Value) -> Result<(), ToolResult> {
         "environments",
         "env_vars",
         "bulk_env_update",
+        "deploy",
+        "stop_all_apps",
+        "redeploy_project",
+        "restart_project_apps",
     ];
     if action_tools.contains(&name) && obj.get("action").and_then(Value::as_str).is_none() {
         return Err(ToolResult::err("action is required"));
@@ -563,6 +567,10 @@ fn validate_input(name: &str, args: &Value) -> Result<(), ToolResult> {
         }
         "environments" | "env_vars" => &["list", "get", "create", "update", "delete"][..],
         "bulk_env_update" => &["update"][..],
+        "deploy" => &["deploy"][..],
+        "stop_all_apps" => &["stop"][..],
+        "redeploy_project" => &["redeploy"][..],
+        "restart_project_apps" => &["restart"][..],
         _ => &[][..],
     };
     if let Some(a) = obj.get("action").and_then(Value::as_str)
@@ -577,7 +585,7 @@ fn validate_input(name: &str, args: &Value) -> Result<(), ToolResult> {
     {
         return Err(ToolResult::err("per_page must be between 1 and 100"));
     }
-    Ok(())
+    serde_json::to_value(typed).map_err(|_| ToolResult::err("typed argument encoding failed"))
 }
 pub async fn call_tool(ctx: ToolContext, name: &str, args: Value) -> ToolResult {
     let finish = |result: ToolResult| {
@@ -589,10 +597,11 @@ pub async fn call_tool(ctx: ToolContext, name: &str, args: Value) -> ToolResult 
     if !registered(name) {
         return finish(ToolResult::err("tool is not registered"));
     }
-    if let Err(e) = validate_input(name, &args) {
-        return finish(e);
-    }
-    let act = action(name, &args);
+    let typed_args = match validate_input(name, &args) {
+        Ok(v) => v,
+        Err(e) => return finish(e),
+    };
+    let act = action(name, &typed_args);
     if !allows(ctx.policy, act) {
         return finish(ToolResult::err(
             "tool is not permitted by the active capability profile",
@@ -607,13 +616,13 @@ pub async fn call_tool(ctx: ToolContext, name: &str, args: Value) -> ToolResult 
     {
         return finish(ToolResult::err("confirmation required for this action"));
     }
-    if let Some(i) = args.get("instance").and_then(Value::as_str)
+    if let Some(i) = typed_args.get("instance").and_then(Value::as_str)
         && ctx.instance.as_deref() != Some(i)
     {
         return finish(ToolResult::err("unknown instance name"));
     }
     finish(
-        dispatch(&ctx.client, name, &args)
+        dispatch(&ctx.client, name, &typed_args)
             .await
             .map(ToolResult::ok)
             .unwrap_or_else(|e| e),

@@ -35,11 +35,46 @@ pub fn schema_for(name: &str, fleet: bool) -> Value {
     if fleet {
         properties["instance"] = json!({"type":"string","description":"Instance name"});
     }
-    if matches!(
-        name,
-        "application" | "database" | "service" | "deployment" | "projects" | "control" | "system"
-    ) {
-        properties["action"] = json!({"type":"string","enum":match name {"application"=>json!(["get","create","update","delete","start","stop","restart","move","migrate","rollback"]),"database"=>json!(["get","create","update","delete","start","stop","restart","move","migrate"]),"service"=>json!(["get","create","update","delete","start","stop","restart"]),"deployment"=>json!(["get","logs","cancel","wait"]),"projects"=>json!(["list","get","create","update","delete"]),"control"=>json!(["start","stop","restart"]),_=>json!(["enable","disable","restart"])}});
+    let actions = match name {
+        "application" => Some(json!([
+            "get", "create", "update", "delete", "start", "stop", "restart", "move", "migrate",
+            "rollback"
+        ])),
+        "database" => Some(json!([
+            "get", "create", "update", "delete", "start", "stop", "restart", "move", "migrate"
+        ])),
+        "service" => Some(json!([
+            "get", "create", "update", "delete", "start", "stop", "restart"
+        ])),
+        "deployment" => Some(json!(["get", "logs", "cancel", "wait"])),
+        "projects" => Some(json!(["list", "get", "create", "update", "delete"])),
+        "control" => Some(json!(["start", "stop", "restart"])),
+        "system" => Some(json!(["enable", "disable", "restart"])),
+        "database_backups" => Some(json!([
+            "list",
+            "get",
+            "create",
+            "update",
+            "delete",
+            "executions"
+        ])),
+        "storages" => Some(json!(["list", "get", "create", "update", "delete"])),
+        "tags" => Some(json!(["list", "create", "delete"])),
+        "cloud_tokens" | "private_keys" | "github_apps" | "hetzner" | "scheduled_tasks" => {
+            Some(json!(["list", "get", "create", "update", "delete"]))
+        }
+        "environments" | "env_vars" => Some(json!(["list", "get", "create", "update", "delete"])),
+        "bulk_env_update" => Some(json!(["update"])),
+        "deploy" => Some(json!(["deploy"])),
+        "stop_all_apps" => Some(json!(["stop"])),
+        "redeploy_project" => Some(json!(["redeploy"])),
+        "restart_project_apps" => Some(json!(["restart"])),
+        _ => None,
+    };
+    let mut out = json!({"type":"object","properties":properties,"additionalProperties":false});
+    if let Some(values) = actions {
+        out["properties"]["action"] = json!({"type":"string","enum":values});
+        out["required"] = json!(["action"]);
     }
-    json!({"type":"object","properties":properties,"additionalProperties":false})
+    out
 }

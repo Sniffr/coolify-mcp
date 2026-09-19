@@ -1,10 +1,10 @@
 
-## Fix round 3 continuation
+## Fix round 4 continuation
 
-Added explicit closed action allowlists and required actions for all action-bearing configuration/collection tools, including backups, storages, tags, credentials, scheduled tasks, environments, env vars, and bulk updates. Read-classified routes use fixed GET methods. Dispatch now deserializes every request through the closed `CommonInput` serde struct; instance and arbitrary method/body/input escape hatches are rejected. Typed body construction only copies validated named fields. Result success envelopes now consistently include bounded `_actions` and bounded pagination metadata for arrays; errors are structured JSON with stable code/message/details and `is_error`. Added closed-schema action enum tests.
+Made the closed serde input authoritative through dispatch: `call_tool` deserializes once into `CommonInput`, validates it, serializes only that typed value for dispatch, and no longer dispatches the raw caller object. Removed arbitrary body/input/method escapes; request bodies are built only from named typed fields. Expanded schemas with exact action enums and required action fields for all action-bearing groups and fixed-action tools. Success truncation now preserves `_actions` and `_pagination`, while structured errors remain stable JSON envelopes.
 
 Verification:
 - `cargo test -p mcp-tools` — passed (6 tests)
 - `cargo test --workspace` — passed
-- `cargo fmt --all -- --check` — passed
+- `cargo fmt --all` — passed
 - `cargo clippy --workspace --all-targets -- -D warnings` — passed
