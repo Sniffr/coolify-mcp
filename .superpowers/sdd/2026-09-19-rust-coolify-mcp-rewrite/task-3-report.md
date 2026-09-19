@@ -81,3 +81,47 @@ All workspace unit, integration, and doc tests passed: 22 passed; 0 failed
 - The `reveal` argument is intentionally an explicit low-level policy input; no higher-level server confirmation/policy plumbing exists yet and remains for later tasks.
 - Typed response models that declare a secret field as a non-string scalar could reject the masked `"***"` value; current client models/tests are unaffected, and later model design should represent masked secrets as strings or optional values.
 - Audit chain continuity currently starts fresh on process restart; persistent rotation/restart verification is outside Task 3.
+
+## Fix Round 1 (review findings)
+
+### Findings addressed
+
+1. Added `sanitize_text` at the API boundary and applied it to `request_text`, preserving ordinary/version text while masking sensitive key/value patterns. Added client integration coverage for both sanitized JSON and text responses.
+2. Changed `environment_variables` handling to preserve its object/array shape and metadata while masking nested `value`/`real_value` members.
+3. Kept the existing `frame_untrusted(text, nonce)` signature for compatibility, but now accepts only safe nonce characters and generates a random internal nonce for unsafe/empty input. Payload boundary phrases are still replaced.
+4. Documented audit canonicalization: serde struct-field JSON bytes are concatenated after UTF-8 bytes of the previous lowercase hex digest, then SHA-256 is computed. Added independent digest-change tests for previous hash, tool, outcome, and timestamp; audit events still have no request/response fields.
+5. Added API-level client tests proving sanitation before model-facing JSON/text results.
+6. Cached the framing regex with `OnceLock` rather than compiling it per call. The sensitive text regex is cached similarly.
+
+### Fix-round TDD red evidence
+
+```text
+$ cargo test -p safety -p coolify-api
+error[E0432]: unresolved import `safety::sanitize_text`
+error: could not compile `safety` (test "masking_tests") due to previous error
+```
+
+This was the expected feature-missing failure for the new text-boundary test before implementing the fix.
+
+### Fix-round green evidence
+
+```text
+$ cargo test -p safety -p coolify-api
+coolify-api: 8 passed; 0 failed
+safety: 11 passed; 0 failed
+```
+
+Final verification:
+
+```text
+$ cargo fmt --all -- --check
+PASS
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+Finished successfully; no warnings
+
+$ cargo test --workspace
+All workspace tests passed: 28 passed; 0 failed
+```
+
+Fix-round files include `crates/safety/src/masking.rs`, `crates/safety/src/untrusted.rs`, `crates/safety/src/audit.rs`, `crates/safety/src/lib.rs`, `crates/safety/tests/masking_tests.rs`, `crates/safety/tests/audit_tests.rs`, `crates/coolify-api/src/client.rs`, and `crates/coolify-api/tests/client_error_tests.rs`.
