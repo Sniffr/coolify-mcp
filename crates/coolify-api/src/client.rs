@@ -44,7 +44,10 @@ impl CoolifyClient {
         let bytes = read_bounded(response)
             .await
             .map_err(|e| CoolifyApiError::Decode(e.to_string()))?;
-        serde_json::from_slice(&bytes).map_err(|e| CoolifyApiError::Decode(e.to_string()))
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(|e| CoolifyApiError::Decode(e.to_string()))?;
+        let sanitized = safety::sanitize_json(&value, false);
+        serde_json::from_value(sanitized).map_err(|e| CoolifyApiError::Decode(e.to_string()))
     }
     pub async fn request_text(
         &self,
