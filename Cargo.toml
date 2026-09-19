@@ -24,3 +24,4 @@ oauth = { path = "crates/oauth" }
 transport = { path = "crates/transport" }
 mcp-tools = { path = "crates/mcp-tools" }
 doctor = { path = "crates/doctor" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

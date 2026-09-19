@@ -1,4 +1,5 @@
 use mcp_tools::{McpApplication, ToolContext, ToolResult, registered_tools};
+use reqwest::header::{HeaderName, HeaderValue};
 use safety::{CapabilityProfile, default_profile_for_transport};
 use serde_json::Value;
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -21,18 +22,58 @@ impl McpApplication for Application {
     }
 }
 
+fn print_doctor_report(report: &doctor::DoctorReport, json: bool) {
+    if json {
+        println!("{}", report.to_json().unwrap_or_else(|_| "{}".into()));
+    } else {
+        print!("{}", report.to_human());
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    let transport = std::env::var("MCP_TRANSPORT").unwrap_or_else(|_| "stdio".into());
+    let args: Vec<String> = std::env::args().collect();
+    let doctor_mode = args.get(1).is_some_and(|arg| arg == "doctor");
+    let json_report = args.iter().any(|arg| arg == "--json");
     let env: HashMap<String, String> = std::env::vars().collect();
+    let transport = env
+        .get("MCP_TRANSPORT")
+        .cloned()
+        .unwrap_or_else(|| "stdio".into());
     let http = transport.eq_ignore_ascii_case("http");
-    let config = match coolify_api::config_from_env(&env, http) {
+    let header = args
+        .windows(2)
+        .find(|pair| pair[0] == "--header")
+        .and_then(|pair| pair[1].split_once(':'))
+        .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()));
+    let mut config = match coolify_api::config_from_env(&env, http) {
         Ok(v) => v,
+        Err(e) if doctor_mode => {
+            let message = e.to_string();
+            let report = doctor::run_doctor(&env, move |_path| {
+                let message = message.clone();
+                async move { Err::<String, String>(message) }
+            })
+            .await;
+            print_doctor_report(&report, json_report);
+            if !report.ok {
+                std::process::exit(1);
+            }
+            return;
+        }
         Err(e) => {
             eprintln!("configuration error: {e}");
             std::process::exit(2);
         }
     };
+    if let Some((key, value)) = header
+        && let (Ok(name), Ok(value)) = (
+            HeaderName::from_bytes(key.as_bytes()),
+            HeaderValue::from_str(&value),
+        )
+    {
+        config.custom_headers.insert(name, value);
+    }
     let client = match coolify_api::CoolifyClient::new(config) {
         Ok(v) => Arc::new(v),
         Err(e) => {
@@ -40,6 +81,25 @@ async fn main() {
             std::process::exit(2);
         }
     };
+    if doctor_mode {
+        let probe_client = client.clone();
+        let report = doctor::run_doctor(&env, move |path| {
+            let probe_client = probe_client.clone();
+            let path = path.to_owned();
+            async move {
+                probe_client
+                    .request_text(reqwest::Method::GET, &path)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
+        })
+        .await;
+        print_doctor_report(&report, json_report);
+        if !report.ok {
+            std::process::exit(1);
+        }
+        return;
+    }
     let profile = if env
         .get("MCP_READONLY")
         .is_some_and(|v| v.eq_ignore_ascii_case("true"))

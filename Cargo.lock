@@ -244,6 +244,12 @@ dependencies = [
 [[package]]
 name = "doctor"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
 
 [[package]]
 name = "encoding_rs"
@@ -1373,6 +1379,7 @@ dependencies = [
  "doctor",
  "mcp-tools",
  "oauth",
+ "reqwest",
  "safety",
  "serde",
  "serde_json",

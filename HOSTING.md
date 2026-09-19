@@ -61,3 +61,11 @@ Ask the MCP client to call `coolify_health`, then perform a safe read such as li
 ## Incident response
 
 If a token is ever pasted into chat, a terminal transcript, a public issue, or a Git commit: revoke it immediately in Coolify, remove it from logs/history where possible, create a replacement, and review API access logs. A token exposed in a conversation should be considered compromised.
+
+## Rust HTTP deployment
+
+The Rust binary supports local stdio and authenticated Streamable HTTP. For `https://mcp.dpdns.org`, configure `MCP_TRANSPORT=http`, `MCP_PUBLIC_URL=https://mcp.dpdns.org`, `MCP_PORT=8080`, and a persistent `/data` volume for OAuth state. OAuth uses authorization code + PKCE; put the Coolify URL/token in runtime secrets, using either `COOLIFY_BASE_URL`/`COOLIFY_ACCESS_TOKEN` or the compatible `COOLIFY_URL`/`COOLIFY_TOKEN` aliases. Do not paste a real token into Git or chat.
+
+Configure a health check for `/healthz`, terminate TLS at the proxy, and ensure `/mcp` is forwarded rather than rewritten by a routing catch-all. Start with `MCP_CAPABILITY_PROFILE=read-only`; explicitly audit any move to operations/admin. Deployment validation must use health, discovery, tool listing, and safe read-only inventory only—never destructive calls.
+
+Before switching production traffic, run `cargo run -- doctor --json` and workspace tests. If health checks or OAuth fail, roll back to the last Rust image or the existing Python stdio installer; do not revoke credentials as part of rollback. Keep the Python path clearly available until the Rust installer is verified.

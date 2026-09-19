@@ -52,6 +52,19 @@ docker compose run --rm coolify-mcp
 
 For a long-running hosted deployment, use a private MCP gateway or a platform that supports stdio MCP processes. Do not publish the token in an image, Dockerfile, public logs, or a public HTTP endpoint. See [`HOSTING.md`](HOSTING.md).
 
+## Rust runtime (current default after verification)
+
+Build and run the Rust implementation over stdio:
+
+```bash
+cargo run --release
+cargo run -- doctor --json
+```
+
+Remote mode uses Streamable HTTP at `/mcp` (the hosted service is `https://mcp.dpdns.org/mcp`) and OAuth 2.1 with PKCE. Set `MCP_TRANSPORT=http`, `MCP_PUBLIC_URL`, `MCP_PORT` (default `8080`), and mount persistent OAuth state at `/data`. `MCP_CAPABILITY_PROFILE` is `read-only`, `operations`, or `admin`; HTTP defaults to read-only. Both `COOLIFY_BASE_URL`/`COOLIFY_ACCESS_TOKEN` and the legacy `COOLIFY_URL`/`COOLIFY_TOKEN` names are accepted (new names win). Never paste a real token into Git, chat, images, or logs.
+
+The Python installer and `coolify_mcp_server.py` remain the fallback until Rust protocol and hosted acceptance checks are complete.
+
 ## 🟣 Claude Code
 
 ## ✨ One-command Claude Code install
