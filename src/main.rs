@@ -52,7 +52,7 @@ async fn main() {
             let message = e.to_string();
             let report = doctor::run_doctor(&env, move |_path| {
                 let message = message.clone();
-                async move { Err::<String, String>(message) }
+                async move { Err::<doctor::ProbeResponse, String>(message) }
             })
             .await;
             print_doctor_report(&report, json_report);
@@ -90,7 +90,28 @@ async fn main() {
                 probe_client
                     .request_text(reqwest::Method::GET, &path)
                     .await
-                    .map_err(|error| error.to_string())
+                    .map_or_else(
+                        |error| {
+                            if let Some(status) = error.status() {
+                                Ok(doctor::ProbeResponse {
+                                    status,
+                                    content_type: Some("application/json".into()),
+                                    body: error.to_string(),
+                                    redirected: false,
+                                })
+                            } else {
+                                Err(error.to_string())
+                            }
+                        },
+                        |body| {
+                            Ok(doctor::ProbeResponse {
+                                status: 200,
+                                content_type: Some("application/json".into()),
+                                body,
+                                redirected: false,
+                            })
+                        },
+                    )
             }
         })
         .await;

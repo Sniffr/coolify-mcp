@@ -19,7 +19,6 @@ pub struct DoctorCheck {
     pub detail: String,
     pub fix: String,
 }
-
 impl DoctorCheck {
     pub fn pass(name: &str, detail: &str, fix: &str) -> Self {
         Self {
@@ -45,6 +44,15 @@ impl DoctorCheck {
             fix: fix.into(),
         }
     }
+}
+
+/// Sanitized metadata from one side-effect-free GET probe. Body is bounded by the caller.
+#[derive(Clone, Debug)]
+pub struct ProbeResponse {
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub body: String,
+    pub redirected: bool,
 }
 
 pub(crate) fn static_checks(env: &HashMap<String, String>) -> Vec<DoctorCheck> {
@@ -91,17 +99,27 @@ pub(crate) fn static_checks(env: &HashMap<String, String>) -> Vec<DoctorCheck> {
             "No action required.",
         )),
     }
-    match token {
-        None => checks.push(DoctorCheck::fail(
+    if env
+        .get("COOLIFY_ACCESS_TOKEN_FILE")
+        .is_some_and(|v| !v.trim().is_empty())
+    {
+        checks.push(DoctorCheck::pass(
+            "coolify_token",
+            "Coolify access token file is configured",
+            "No action required.",
+        ));
+    } else if token.is_none() {
+        checks.push(DoctorCheck::fail(
             "coolify_token",
             "Coolify access token is not configured",
             "Set COOLIFY_ACCESS_TOKEN (or COOLIFY_TOKEN), or provide a token file.",
-        )),
-        Some(_) => checks.push(DoctorCheck::pass(
+        ));
+    } else {
+        checks.push(DoctorCheck::pass(
             "coolify_token",
             "Coolify access token is configured",
             "No action required.",
-        )),
+        ));
     }
     let literal = env.values().any(|v| v.contains("${") || v.contains("$({"));
     checks.push(if literal {
@@ -153,14 +171,27 @@ pub(crate) fn static_checks(env: &HashMap<String, String>) -> Vec<DoctorCheck> {
             )),
         }
     }
-    let profile = env
-        .get("MCP_CAPABILITY_PROFILE")
-        .map(String::as_str)
-        .unwrap_or("operations");
+    let explicit = env.get("MCP_CAPABILITY_PROFILE").map(String::as_str);
+    let profile = explicit.unwrap_or_else(|| {
+        if env
+            .get("MCP_TRANSPORT")
+            .is_some_and(|v| v.eq_ignore_ascii_case("http"))
+        {
+            "read-only"
+        } else {
+            "operations"
+        }
+    });
     checks.push(if matches!(profile, "read-only" | "operations" | "admin") {
         DoctorCheck::pass(
             "capability_profile",
-            "Capability profile is recognized",
+            if explicit.is_some() {
+                "Capability profile is recognized"
+            } else if profile == "read-only" {
+                "HTTP defaults to read-only capability"
+            } else {
+                "stdio defaults to operations capability"
+            },
             "No action required.",
         )
     } else {
@@ -173,21 +204,21 @@ pub(crate) fn static_checks(env: &HashMap<String, String>) -> Vec<DoctorCheck> {
     checks
 }
 
-pub(crate) async fn network_checks<F, Fut>(fetcher: &F) -> Vec<DoctorCheck>
+pub(crate) async fn network_checks<F, Fut>(
+    env: &HashMap<String, String>,
+    fetcher: &F,
+) -> Vec<DoctorCheck>
 where
     F: Fn(&str) -> Fut,
-    Fut: Future<Output = Result<String, String>>,
+    Fut: Future<Output = Result<ProbeResponse, String>>,
 {
     let mut checks = Vec::new();
-    let version = bounded(fetcher("/version")).await;
-    match version {
-        Ok(value) => {
-            let supported = value.trim().split('.').take(2).collect::<Vec<_>>();
-            let valid = supported.len() == 2
-                && supported[0] == "4"
-                && supported[1]
-                    .parse::<u64>()
-                    .is_ok_and(|minor| (0..=3).contains(&minor));
+    match bounded(fetcher("/version")).await {
+        Ok(response) if (200..300).contains(&response.status) => {
+            let parts = response.body.trim().split('.').take(2).collect::<Vec<_>>();
+            let valid = parts.len() == 2
+                && parts[0] == "4"
+                && parts[1].parse::<u64>().is_ok_and(|minor| minor <= 3);
             checks.push(if valid {
                 DoctorCheck::pass(
                     "version",
@@ -207,28 +238,76 @@ where
                 "No action required.",
             ));
         }
-        Err(error) => {
-            let lower = error.to_ascii_lowercase();
-            let detail = if lower.contains("401") || lower.contains("unauthorized") {
-                "Coolify rejected the access token"
-            } else if lower.contains("redirect") || lower.contains("cloudflare") {
-                "Coolify probe was redirected by a proxy or Cloudflare"
-            } else {
-                "Coolify did not answer the read-only probe"
-            };
-            let name = if lower.contains("401") || lower.contains("unauthorized") {
-                "token_valid"
-            } else {
-                "coolify_reachable"
-            };
+        Ok(response) if response.status == 401 || response.status == 403 => {
             checks.push(DoctorCheck::fail(
-                name,
-                detail,
-                if name == "token_valid" {
-                    "Create a valid Coolify API token and inject it at runtime."
-                } else {
-                    "Check DNS, proxy, firewall, and the Coolify URL."
-                },
+                "token_valid",
+                "Coolify rejected the access token",
+                "Create a valid Coolify API token and inject it at runtime.",
+            ));
+            checks.push(DoctorCheck::inconclusive(
+                "coolify_reachable",
+                "Coolify is reachable but authorization failed",
+                "Fix the token, then run doctor again.",
+            ));
+            checks.push(DoctorCheck::inconclusive(
+                "version",
+                "Coolify version could not be verified",
+                "Restore authorization, then run doctor again.",
+            ));
+        }
+        Ok(response)
+            if response.redirected
+                || (300..400).contains(&response.status)
+                || is_html(&response) =>
+        {
+            checks.push(DoctorCheck::fail(
+                "coolify_reachable",
+                "Coolify probe was redirected by a proxy or Cloudflare",
+                "Check DNS, proxy, TLS, and the Coolify URL.",
+            ));
+            checks.push(DoctorCheck::inconclusive(
+                "version",
+                "Coolify version could not be verified",
+                "Restore direct API access, then run doctor again.",
+            ));
+        }
+        Ok(_) => {
+            checks.push(DoctorCheck::fail(
+                "coolify_reachable",
+                "Coolify did not answer the read-only probe",
+                "Check DNS, proxy, firewall, and the Coolify URL.",
+            ));
+            checks.push(DoctorCheck::inconclusive(
+                "version",
+                "Coolify version could not be verified",
+                "Restore connectivity, then run doctor again.",
+            ));
+        }
+        Err(error)
+            if error.to_ascii_lowercase().contains("401")
+                || error.to_ascii_lowercase().contains("unauthorized") =>
+        {
+            checks.push(DoctorCheck::fail(
+                "token_valid",
+                "Coolify rejected the access token",
+                "Create a valid Coolify API token and inject it at runtime.",
+            ));
+            checks.push(DoctorCheck::inconclusive(
+                "coolify_reachable",
+                "Coolify is reachable but authorization failed",
+                "Fix the token, then run doctor again.",
+            ));
+            checks.push(DoctorCheck::inconclusive(
+                "version",
+                "Coolify version could not be verified",
+                "Restore authorization, then run doctor again.",
+            ));
+        }
+        Err(_) => {
+            checks.push(DoctorCheck::inconclusive(
+                "coolify_reachable",
+                "Coolify did not answer the read-only probe",
+                "Check DNS, proxy, firewall, and the Coolify URL.",
             ));
             checks.push(DoctorCheck::inconclusive(
                 "version",
@@ -237,47 +316,78 @@ where
             ));
         }
     }
-    for (name, path, fix) in [
-        (
-            "routing_catch_all",
-            "/mcp",
-            "Ensure the reverse proxy forwards /mcp without a catch-all HTML rewrite.",
-        ),
-        (
-            "deploy_ability",
-            "/applications",
-            "Use an operations/admin profile and a token permitted to read application state.",
-        ),
-    ] {
-        match bounded(fetcher(path)).await {
-            Ok(_) => checks.push(DoctorCheck::pass(
-                name,
-                "Read-only endpoint probe succeeded",
+    // Deliberately invalid API route: a valid API error proves routing without touching /mcp or mutating state.
+    match bounded(fetcher("/__coolify_mcp_doctor_invalid__")).await {
+        Ok(response)
+            if (400..500).contains(&response.status)
+                && is_json(&response)
+                && !response.redirected =>
+        {
+            checks.push(DoctorCheck::pass(
+                "routing_catch_all",
+                "Invalid API route returned a structured JSON error",
                 "No action required.",
-            )),
-            Err(error) if error.contains("401") || error.contains("403") => checks.push(
-                DoctorCheck::fail(name, "Coolify denied the read-only capability probe", fix),
-            ),
-            Err(error) if error.to_ascii_lowercase().contains("html") => {
-                checks.push(DoctorCheck::fail(
-                    name,
-                    "Proxy returned an HTML catch-all instead of the expected endpoint",
-                    fix,
-                ))
-            }
-            Err(_) => checks.push(DoctorCheck::inconclusive(
-                name,
-                "Endpoint probe could not be completed",
-                fix,
-            )),
+            ))
         }
+        Ok(response)
+            if response.redirected
+                || (300..400).contains(&response.status)
+                || is_html(&response)
+                || (200..300).contains(&response.status) =>
+        {
+            checks.push(DoctorCheck::fail(
+                "routing_catch_all",
+                "Invalid API route was handled by a proxy catch-all or redirect",
+                "Ensure the reverse proxy forwards the Coolify API path without an HTML rewrite.",
+            ))
+        }
+        Ok(_) | Err(_) => checks.push(DoctorCheck::inconclusive(
+            "routing_catch_all",
+            "Invalid API route probe could not be classified",
+            "Check the Coolify API route and proxy response headers.",
+        )),
     }
+    let explicit_permission = env.get("MCP_DEPLOY_PERMISSION").map(|v| {
+        matches!(
+            v.to_ascii_lowercase().as_str(),
+            "true" | "yes" | "operations" | "admin"
+        )
+    });
+    let profile = env
+        .get("MCP_CAPABILITY_PROFILE")
+        .map(String::as_str)
+        .unwrap_or_else(|| {
+            if env
+                .get("MCP_TRANSPORT")
+                .is_some_and(|v| v.eq_ignore_ascii_case("http"))
+            {
+                "read-only"
+            } else {
+                "operations"
+            }
+        });
+    let deploy_allowed = explicit_permission.unwrap_or(matches!(profile, "operations" | "admin"));
+    checks.push(if deploy_allowed { DoctorCheck::pass("deploy_ability", "Configured capability profile permits deployment operations", "No action required.") } else { DoctorCheck::fail("deploy_ability", "No deployment capability is configured", "Use an operations/admin profile or explicitly configure deploy permission; doctor never triggers deployment.") });
     checks
 }
 
-async fn bounded<Fut>(future: Fut) -> Result<String, String>
+fn is_json(response: &ProbeResponse) -> bool {
+    response
+        .content_type
+        .as_deref()
+        .is_some_and(|v| v.to_ascii_lowercase().contains("json"))
+}
+fn is_html(response: &ProbeResponse) -> bool {
+    response
+        .content_type
+        .as_deref()
+        .is_some_and(|v| v.to_ascii_lowercase().contains("html"))
+        || response.body.to_ascii_lowercase().contains("<html")
+        || response.body.to_ascii_lowercase().contains("cloudflare")
+}
+async fn bounded<Fut>(future: Fut) -> Result<ProbeResponse, String>
 where
-    Fut: Future<Output = Result<String, String>>,
+    Fut: Future<Output = Result<ProbeResponse, String>>,
 {
     tokio::time::timeout(Duration::from_secs(10), future)
         .await

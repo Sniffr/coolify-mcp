@@ -33,3 +33,7 @@ No deployment was performed.
 ## Hostname correction
 
 The hosted endpoint was corrected to the concrete `mcp.social.dpdns.org` host under the wildcard DNS zone `*.social.dpdns.org`. README, HOSTING, `.env.example`, migration documentation, and the approved plan/spec now use the corrected hostname; no product behavior changed.
+
+## Fix round 1
+
+Addressed review findings: routing diagnostics now probe a deliberately invalid Coolify API route and classify structured JSON errors versus HTML/Cloudflare redirects/catch-alls using status, body, and content type; `/mcp` is never probed. Deployment ability is inferred only from explicit capability profile/permission configuration and never triggers a mutation. Added deterministic fixtures for unreachable services, invalid tokens, redirects, unsupported versions, missing deployment capability, routing shapes, transport defaults, and token-file configuration. All probes remain bounded to ten seconds, and token-file paths/contents are not emitted.
