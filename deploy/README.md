@@ -24,7 +24,7 @@ Use the reviewed Rust image built from the deployment commit with:
 - `MCP_PORT=8080`
 - `MCP_CAPABILITY_PROFILE=read-only`
 - container user `10001:10001` (non-root)
-- persistent writable `/data` volume for OAuth state
+- persistent writable `/data` volume for OAuth state, its adjacent mode-600 signing key, and audit log
 - health check `GET /healthz`
 
 Inject Coolify URL/token and OAuth key material only through the approved host secret mechanism. Never place them in `compose.yaml`, Dockerfile, image labels, shell arguments, logs, or Git.

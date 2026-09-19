@@ -50,9 +50,14 @@ pub struct AuditLogger<W: Write> {
 
 impl<W: Write> AuditLogger<W> {
     pub fn new(writer: W) -> Self {
+        Self::with_previous_hash(writer, String::new())
+    }
+
+    /// Create a logger continuing an already persisted chain.
+    pub fn with_previous_hash(writer: W, previous_hash: impl Into<String>) -> Self {
         Self {
             writer,
-            previous_hash: String::new(),
+            previous_hash: previous_hash.into(),
         }
     }
 

@@ -99,7 +99,7 @@ The server accepts both the current repository's names and the reference names:
 - `MCP_HOST` controls the bind interface.
 - `MCP_READONLY=true` registers only read-only tools.
 - `MCP_CAPABILITY_PROFILE` supports `read-only`, `operations`, and `admin`; HTTP defaults to `read-only`, while stdio defaults to the current operations-capable behavior for compatibility.
-- `MCP_OAUTH_STATE_FILE` defaults to `/data/oauth-state.json` in the container.
+- `MCP_OAUTH_STATE_FILE` defaults to `/data/oauth-state.json` in the container. The OAuth HMAC signing key is persisted atomically beside it as `oauth-state.key` with mode 600; both files must survive restarts. Hosted audit events are appended to `MCP_AUDIT_LOG` (default `/data/audit.jsonl`) with mode 600.
 - `MCP_ACCESS_TOKEN_TTL` and `MCP_REFRESH_TOKEN_TTL` control OAuth lifetimes.
 - `COOLIFY_MCP_AUDIT` defaults on for HTTP and off for local stdio.
 - `MCP_ALLOW_INSECURE_HTTP=true` is permitted only for local development.

@@ -9,13 +9,16 @@ use axum::{
 };
 use mcp_tools::{McpApplication, ToolResult};
 use oauth::{AuthorizeRequest, OAuthError, RegistrationRequest, TokenRequest};
+use safety::{AuditEvent, AuditLogger};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
+    fs::{File, OpenOptions},
+    io::{BufRead, BufReader},
     net::SocketAddr,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tower_http::timeout::{RequestBodyTimeoutLayer, TimeoutLayer};
 
@@ -58,7 +61,77 @@ struct AppState {
     config: HttpConfig,
     rate: RateLimiter,
     sessions: Arc<Mutex<HashMap<String, Instant>>>,
+    audit: Option<Arc<Mutex<AuditLogger<File>>>>,
 }
+fn open_audit(config: &HttpConfig) -> Option<Arc<Mutex<AuditLogger<File>>>> {
+    if let Some(parent) = config.audit_path.parent() {
+        std::fs::create_dir_all(parent).ok()?;
+    }
+    let previous_hash = File::open(&config.audit_path)
+        .ok()
+        .and_then(|file| {
+            BufReader::new(file)
+                .lines()
+                .map_while(Result::ok)
+                .last()
+                .and_then(|line| serde_json::from_str::<Value>(&line).ok())
+                .and_then(|record| {
+                    record
+                        .get("hash")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+        })
+        .unwrap_or_default();
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&config.audit_path)
+        .ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ =
+            std::fs::set_permissions(&config.audit_path, std::fs::Permissions::from_mode(0o600));
+    }
+    Some(Arc::new(Mutex::new(AuditLogger::with_previous_hash(
+        file,
+        previous_hash,
+    ))))
+}
+
+fn audit_event(
+    state: &AppState,
+    client_id: Option<&str>,
+    tool: &str,
+    args: Option<&Value>,
+    outcome: &str,
+    status: StatusCode,
+    started: Instant,
+) {
+    let Some(logger) = &state.audit else { return };
+    let resource_id = args
+        .and_then(|v| v.get("uuid").or_else(|| v.get("id")))
+        .and_then(Value::as_str)
+        .map(|v| v.chars().take(128).collect::<String>())
+        .unwrap_or_default();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string();
+    let event = AuditEvent::new(
+        timestamp,
+        client_id,
+        tool.chars().take(128).collect::<String>(),
+        resource_id,
+        outcome,
+        status.as_u16(),
+        started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+    );
+    let _ = logger.lock().unwrap().record(event);
+}
+
 struct EmptyApp;
 impl McpApplication for EmptyApp {
     fn tools(&self) -> Vec<mcp_tools::ToolSpec> {
@@ -83,11 +156,18 @@ pub fn router(config: HttpConfig) -> Router {
     )))
 }
 pub fn router_with_app<A: McpApplication + 'static>(config: HttpConfig, app: A) -> Router {
+    let audit = open_audit(&config);
+    if audit.is_none() {
+        config
+            .persistence_health
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
     let state = AppState {
         app: Arc::new(app),
         config,
         rate: RateLimiter::new(),
         sessions: Arc::new(Mutex::new(HashMap::new())),
+        audit,
     };
     let request_timeout = state.config.request_timeout;
     Router::new()
@@ -403,29 +483,71 @@ async fn mcp_get(State(s): State<AppState>, headers: HeaderMap) -> Response {
     StatusCode::NO_CONTENT.into_response()
 }
 async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    if authorized(&headers, &s).is_err() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error":"invalid bearer token"})),
-        )
-            .into_response();
-    }
+    let started = Instant::now();
+    let parsed_body = serde_json::from_slice::<Value>(&body).ok();
+    let audit_name = parsed_body
+        .as_ref()
+        .and_then(|v| v.pointer("/params/name"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let audit_args = parsed_body
+        .as_ref()
+        .and_then(|v| v.pointer("/params/arguments"));
+    let client = match authorized(&headers, &s) {
+        Ok(client) => Some(client),
+        Err(_) => {
+            audit_event(
+                &s,
+                None,
+                audit_name,
+                audit_args,
+                "rejected",
+                StatusCode::UNAUTHORIZED,
+                started,
+            );
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error":"invalid bearer token"})),
+            )
+                .into_response();
+        }
+    };
     if !content_json(&headers) || !accepts_json(&headers) {
+        audit_event(
+            &s,
+            client.as_deref(),
+            audit_name,
+            audit_args,
+            "rejected",
+            StatusCode::NOT_ACCEPTABLE,
+            started,
+        );
         return (
             StatusCode::NOT_ACCEPTABLE,
             Json(json!({"error":"Content-Type application/json and acceptable Accept required"})),
         )
             .into_response();
     }
-    let request: Value = match serde_json::from_slice(&body) {
-        Ok(v) => v,
-        Err(_) => return (
-            StatusCode::BAD_REQUEST,
-            Json(
-                json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}),
-            ),
-        )
-            .into_response(),
+    let request: Value = match parsed_body {
+        Some(v) => v,
+        None => {
+            audit_event(
+                &s,
+                client.as_deref(),
+                audit_name,
+                None,
+                "rejected",
+                StatusCode::BAD_REQUEST,
+                started,
+            );
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}),
+                ),
+            )
+                .into_response();
+        }
     };
     if request.get("id").is_none() {
         return StatusCode::ACCEPTED.into_response();
@@ -460,6 +582,15 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
                 .cloned()
                 .unwrap_or_else(|| json!({}));
             let r = s.app.call(name, args).await;
+            audit_event(
+                &s,
+                client.as_deref(),
+                name,
+                request.pointer("/params/arguments"),
+                if r.is_error { "error" } else { "ok" },
+                StatusCode::OK,
+                started,
+            );
             json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":r.text}],"isError":r.is_error}})
         }
         _ => json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Method not found"}}),

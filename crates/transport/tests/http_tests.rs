@@ -87,6 +87,35 @@ async fn health_and_discovery_are_public_but_mcp_requires_bearer() {
 }
 
 #[tokio::test]
+async fn hosted_tool_call_audits_rejection_without_args_or_secrets() {
+    let path = std::env::temp_dir().join(format!("audit-{}.jsonl", uuid::Uuid::new_v4()));
+    let mut config = HttpConfig::for_tests();
+    config.audit_path = path.clone();
+    let app = router_with_app(config, TestApp);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/mcp")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header("accept", "application/json")
+                .body(Body::from(r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"cloud_tokens","arguments":{"uuid":"resource-123","token":"super-secret"}}}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let audit = std::fs::read_to_string(&path).unwrap();
+    assert!(audit.contains("cloud_tokens"));
+    assert!(audit.contains("resource-123"));
+    assert!(audit.contains("rejected"));
+    assert!(!audit.contains("super-secret"));
+    assert!(!audit.contains("arguments"));
+    assert!(!audit.contains("uuid"));
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
 async fn oauth_mutation_endpoints_rate_limit_by_client_ip() {
     let app = router(HttpConfig::for_tests());
     let mut limited = false;

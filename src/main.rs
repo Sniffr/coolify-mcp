@@ -182,7 +182,7 @@ async fn main() {
         let (oauth, persistence_available) = match oauth::OAuthProvider::with_store(
             transport::public_base(&public_url),
             "/mcp".into(),
-            state_path,
+            state_path.clone(),
         ) {
             Ok(provider) => (Arc::new(provider), true),
             Err(error) => {
@@ -210,6 +210,15 @@ async fn main() {
             trusted_proxy: env
                 .get("MCP_TRUSTED_PROXY")
                 .is_some_and(|v| v.eq_ignore_ascii_case("true")),
+            audit_path: env
+                .get("MCP_AUDIT_LOG")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    state_path
+                        .parent()
+                        .unwrap_or_else(|| std::path::Path::new("."))
+                        .join("audit.jsonl")
+                }),
         };
         if let Err(e) = transport::run_http(app, cfg).await {
             eprintln!("HTTP transport error: {e}");

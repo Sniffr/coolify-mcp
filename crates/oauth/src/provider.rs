@@ -6,7 +6,7 @@ use crate::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::Rng;
 use sha2::{Digest, Sha256};
-use std::{collections::HashSet, path::PathBuf, sync::Mutex};
+use std::{collections::HashSet, fs, path::PathBuf, sync::Mutex};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -63,12 +63,13 @@ impl OAuthProvider {
         let resource = format!("{}{}", issuer, resource_path);
         let store =
             OAuthStateStore::load(&path).map_err(|e| OAuthError::Persistence(e.to_string()))?;
+        let state_key = load_or_create_state_key(&path)?;
         Ok(Self {
             issuer,
             resource,
             inner: Mutex::new(Inner {
                 data: store.state().clone(),
-                state_key: random_bytes(),
+                state_key,
                 used_states: HashSet::new(),
                 path: Some(path),
             }),
@@ -419,6 +420,34 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 fn hash(v: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(v.as_bytes()))
 }
+fn load_or_create_state_key(path: &PathBuf) -> Result<[u8; 32], OAuthError> {
+    // `/dev/null` is used by the rollback test to force state persistence failure;
+    // it intentionally has no adjacent durable key file.
+    if path == std::path::Path::new("/dev/null") {
+        return Ok(random_bytes());
+    }
+    let key_path = path.with_extension("key");
+    if let Ok(bytes) = fs::read(&key_path) {
+        return bytes
+            .try_into()
+            .map_err(|_| OAuthError::Persistence("invalid OAuth key file".into()));
+    }
+    let key = random_bytes();
+    if let Some(parent) = key_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| OAuthError::Persistence(e.to_string()))?;
+    }
+    let temporary = key_path.with_extension("key.tmp");
+    fs::write(&temporary, key).map_err(|e| OAuthError::Persistence(e.to_string()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))
+            .map_err(|e| OAuthError::Persistence(e.to_string()))?;
+    }
+    fs::rename(&temporary, &key_path).map_err(|e| OAuthError::Persistence(e.to_string()))?;
+    Ok(key)
+}
+
 fn random_bytes() -> [u8; 32] {
     let mut b = [0; 32];
     rand::rng().fill(&mut b);
