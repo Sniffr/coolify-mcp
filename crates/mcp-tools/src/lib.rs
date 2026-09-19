@@ -45,14 +45,57 @@ fn id<'a>(a: &'a Value, n: &str) -> Result<&'a str, ToolResult> {
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ToolResult::err(format!("{n} is required")))
 }
-fn body(a: &Value) -> Option<Value> {
-    a.get("body").cloned().or_else(|| a.get("input").cloned())
+fn typed_body(a: &Value) -> Option<Value> {
+    let o = a.as_object()?;
+    let mut out = serde_json::Map::new();
+    for key in [
+        "name",
+        "type",
+        "fqdn",
+        "repository",
+        "branch",
+        "key",
+        "value",
+        "schedule",
+        "command",
+        "provider",
+        "organization",
+        "team_id",
+    ] {
+        if let Some(v) = o.get(key) {
+            out.insert(key.into(), v.clone());
+        }
+    }
+    (!out.is_empty()).then_some(Value::Object(out))
 }
-fn method(a: &Value) -> Method {
-    match a.get("method").and_then(Value::as_str).unwrap_or("PATCH") {
-        "GET" => Method::GET,
-        "POST" => Method::POST,
-        "DELETE" => Method::DELETE,
+fn fixed_method(name: &str, action: Option<&str>) -> Method {
+    match (name, action) {
+        (
+            "list_applications"
+            | "list_servers"
+            | "list_databases"
+            | "list_services"
+            | "list_deployments"
+            | "get_application"
+            | "get_database"
+            | "get_service"
+            | "get_server"
+            | "application_logs"
+            | "logs"
+            | "diagnose_app"
+            | "diagnose_server"
+            | "search_docs"
+            | "find_issues"
+            | "get_infrastructure_overview"
+            | "server_domains"
+            | "server_resources"
+            | "list_destinations"
+            | "teams",
+            _,
+        ) => Method::GET,
+        (_, Some("get" | "list" | "logs" | "search")) => Method::GET,
+        (_, Some("delete" | "remove")) => Method::DELETE,
+        (_, Some("start" | "stop" | "restart" | "cancel" | "deploy")) => Method::POST,
         _ => Method::PATCH,
     }
 }
@@ -112,7 +155,12 @@ fn action(n: &str, a: &Value) -> Action {
         Action::Write
     }
 }
-async fn generic(c: &CoolifyClient, root: &str, a: &Value) -> Result<Value, ToolResult> {
+async fn fixed_request(
+    c: &CoolifyClient,
+    root: &str,
+    a: &Value,
+    tool: &str,
+) -> Result<Value, ToolResult> {
     let suffix = a
         .get("uuid")
         .or_else(|| a.get("id"))
@@ -120,9 +168,13 @@ async fn generic(c: &CoolifyClient, root: &str, a: &Value) -> Result<Value, Tool
         .map(|x| format!("/{}", seg(x)))
         .unwrap_or_default();
     let path = format!("{root}{suffix}");
-    c.request_value(method(a), &path, body(a))
-        .await
-        .map_err(api)
+    c.request_value(
+        fixed_method(tool, a.get("action").and_then(Value::as_str)),
+        &path,
+        typed_body(a),
+    )
+    .await
+    .map_err(api)
 }
 async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolResult> {
     let page = a.get("page").and_then(Value::as_u64).unwrap_or(1) as u32;
@@ -156,7 +208,7 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
             match a.get("action").and_then(Value::as_str) {
                 Some("get") => c.get_application(u).await.map(|v| json!(v)).map_err(api),
                 Some(x) => c
-                    .application_action(u, x, body(a))
+                    .application_action(u, x, typed_body(a))
                     .await
                     .map(|v| json!(v))
                     .map_err(api),
@@ -175,15 +227,15 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
                 a.get("action")
                     .and_then(Value::as_str)
                     .ok_or_else(|| ToolResult::err("action is required"))?,
-                method(a),
-                body(a),
+                fixed_method(n, a.get("action").and_then(Value::as_str)),
+                typed_body(a),
             )
             .await
             .map(|v| json!(v))
             .map_err(api),
         "database_backups" => c
             .request_value(
-                method(a),
+                fixed_method(n, a.get("action").and_then(Value::as_str)),
                 &format!(
                     "/databases/{}/backups{}",
                     seg(id(a, "uuid")?),
@@ -192,7 +244,7 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
                         .map(|x| format!("/{}", seg(x)))
                         .unwrap_or_default()
                 ),
-                body(a),
+                typed_body(a),
             )
             .await
             .map_err(api),
@@ -208,8 +260,8 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
                 a.get("action")
                     .and_then(Value::as_str)
                     .ok_or_else(|| ToolResult::err("action is required"))?,
-                method(a),
-                body(a),
+                fixed_method(n, a.get("action").and_then(Value::as_str)),
+                typed_body(a),
             )
             .await
             .map(|v| json!(v))
@@ -230,12 +282,24 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
             .map(|v| json!(v))
             .map_err(api),
         "server_domains" => {
-            generic(c, &format!("/servers/{}/domains", seg(id(a, "uuid")?)), a).await
+            fixed_request(
+                c,
+                &format!("/servers/{}/domains", seg(id(a, "uuid")?)),
+                a,
+                n,
+            )
+            .await
         }
         "server_resources" => {
-            generic(c, &format!("/servers/{}/resources", seg(id(a, "uuid")?)), a).await
+            fixed_request(
+                c,
+                &format!("/servers/{}/resources", seg(id(a, "uuid")?)),
+                a,
+                n,
+            )
+            .await
         }
-        "list_destinations" => generic(c, "/destinations", a).await,
+        "list_destinations" => fixed_request(c, "/destinations", a, n).await,
         "list_deployments" => c.list_deployments().await.map(|v| json!(v)).map_err(api),
         "deployment" => {
             let u = id(a, "uuid")?;
@@ -286,7 +350,7 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
             }
         }
         "deploy" => c
-            .trigger_deployment(body(a).unwrap_or_else(|| json!({})))
+            .trigger_deployment(typed_body(a).unwrap_or_else(|| json!({})))
             .await
             .map(|v| json!(v))
             .map_err(api),
@@ -302,12 +366,12 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
                 .map(|v| json!(v))
                 .map_err(api),
             Some("create") => c
-                .create_project(body(a).unwrap_or_else(|| json!({})))
+                .create_project(typed_body(a).unwrap_or_else(|| json!({})))
                 .await
                 .map(|v| json!(v))
                 .map_err(api),
             Some("update") => c
-                .update_project(id(a, "uuid")?, body(a).unwrap_or_else(|| json!({})))
+                .update_project(id(a, "uuid")?, typed_body(a).unwrap_or_else(|| json!({})))
                 .await
                 .map(|v| json!(v))
                 .map_err(api),
@@ -332,8 +396,8 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
             .application_storage(
                 id(a, "uuid")?,
                 a.get("storage_uuid").and_then(Value::as_str),
-                method(a),
-                body(a),
+                fixed_method(n, a.get("action").and_then(Value::as_str)),
+                typed_body(a),
             )
             .await
             .map(|v| json!(v))
@@ -341,8 +405,8 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
         "tags" => c
             .tags(
                 a.get("tag_uuid").and_then(Value::as_str),
-                method(a),
-                body(a),
+                fixed_method(n, a.get("action").and_then(Value::as_str)),
+                typed_body(a),
             )
             .await
             .map(|v| json!(v))
@@ -352,7 +416,7 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
                 a.get("action")
                     .and_then(Value::as_str)
                     .ok_or_else(|| ToolResult::err("action is required"))?,
-                body(a),
+                typed_body(a),
             )
             .await
             .map(|v| json!(v))
@@ -367,29 +431,29 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
             .await
             .map(|v| json!(v))
             .map_err(api),
-        "cloud_tokens" => generic(c, "/cloud-tokens", a).await,
-        "private_keys" => generic(c, "/private-keys", a).await,
-        "github_apps" => generic(c, "/github-apps", a).await,
-        "hetzner" => generic(c, "/hetzner", a).await,
-        "scheduled_tasks" => generic(c, "/scheduled-tasks", a).await,
-        "teams" => generic(c, "/teams", a).await,
-        "search_docs" => generic(c, "/docs", a).await,
-        "get_infrastructure_overview" => generic(c, "/resources", a).await,
-        "find_issues" => generic(c, "/diagnostics", a).await,
+        "cloud_tokens" => fixed_request(c, "/cloud-tokens", a, n).await,
+        "private_keys" => fixed_request(c, "/private-keys", a, n).await,
+        "github_apps" => fixed_request(c, "/github-apps", a, n).await,
+        "hetzner" => fixed_request(c, "/hetzner", a, n).await,
+        "scheduled_tasks" => fixed_request(c, "/scheduled-tasks", a, n).await,
+        "teams" => fixed_request(c, "/teams", a, n).await,
+        "search_docs" => fixed_request(c, "/docs", a, n).await,
+        "get_infrastructure_overview" => fixed_request(c, "/resources", a, n).await,
+        "find_issues" => fixed_request(c, "/diagnostics", a, n).await,
         "bulk_env_update" => c
-            .request_value(Method::PATCH, "/applications/envs/bulk", body(a))
+            .request_value(Method::PATCH, "/applications/envs/bulk", typed_body(a))
             .await
             .map_err(api),
         "stop_all_apps" => c
-            .request_value(Method::POST, "/applications/stop", body(a))
+            .request_value(Method::POST, "/applications/stop", typed_body(a))
             .await
             .map_err(api),
         "redeploy_project" => c
-            .request_value(Method::POST, "/deploy", body(a))
+            .request_value(Method::POST, "/deploy", typed_body(a))
             .await
             .map_err(api),
         "restart_project_apps" => c
-            .request_value(Method::POST, "/applications/restart", body(a))
+            .request_value(Method::POST, "/applications/restart", typed_body(a))
             .await
             .map_err(api),
         "control" => c
@@ -398,7 +462,7 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
                 a.get("action")
                     .and_then(Value::as_str)
                     .ok_or_else(|| ToolResult::err("action is required"))?,
-                body(a),
+                typed_body(a),
             )
             .await
             .map(|v| json!(v))
@@ -417,9 +481,6 @@ fn validate_input(name: &str, args: &Value) -> Result<(), ToolResult> {
         "uuid",
         "id",
         "action",
-        "method",
-        "body",
-        "input",
         "page",
         "per_page",
         "lines",
@@ -430,14 +491,21 @@ fn validate_input(name: &str, args: &Value) -> Result<(), ToolResult> {
         "backup_uuid",
         "query",
         "instance",
+        "name",
+        "type",
+        "fqdn",
+        "repository",
+        "branch",
+        "key",
+        "value",
+        "schedule",
+        "command",
+        "provider",
+        "organization",
+        "team_id",
     ];
     if let Some(k) = obj.keys().find(|k| !common.contains(&k.as_str())) {
         return Err(ToolResult::err(format!("unknown argument '{k}'")));
-    }
-    if let Some(m) = obj.get("method").and_then(Value::as_str)
-        && !matches!(m, "GET" | "POST" | "PATCH" | "DELETE")
-    {
-        return Err(ToolResult::err("method is not allowed"));
     }
     let allowed = match name {
         "application" => &[
