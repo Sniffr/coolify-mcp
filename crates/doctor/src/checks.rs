@@ -69,12 +69,16 @@ pub(crate) fn effective_profile(env: &HashMap<String, String>) -> &'static str {
         return "read-only";
     }
     if let Some(profile) = env.get("MCP_CAPABILITY_PROFILE") {
-        return match profile.as_str() {
-            "read-only" => "read-only",
-            "operations" => "operations",
-            "admin" => "admin",
-            _ => "invalid",
-        };
+        if profile.eq_ignore_ascii_case("read-only") {
+            return "read-only";
+        }
+        if profile.eq_ignore_ascii_case("operations") {
+            return "operations";
+        }
+        if profile.eq_ignore_ascii_case("admin") {
+            return "admin";
+        }
+        return "invalid";
     }
     let transport = env
         .get("MCP_TRANSPORT")

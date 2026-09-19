@@ -426,6 +426,79 @@ async fn deploy_ability_matches_effective_runtime_config() {
     );
 }
 
+#[tokio::test]
+async fn capability_profile_parsing_matches_runtime_case_insensitively() {
+    async fn report_for(env: &HashMap<String, String>) -> Vec<doctor::DoctorCheck> {
+        run_doctor(env, |path| {
+            let path = path.to_owned();
+            async move {
+                if path == "/version" {
+                    Ok(response(200, "text/plain", "4.2.0"))
+                } else {
+                    Ok(response(
+                        404,
+                        "application/json",
+                        "{\"message\":\"not found\"}",
+                    ))
+                }
+            }
+        })
+        .await
+        .checks
+    }
+    fn status_of(checks: &[doctor::DoctorCheck], name: &str) -> DoctorCheckStatus {
+        checks
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap()
+            .status
+            .clone()
+    }
+
+    // Uppercase/mixed-case values must be accepted exactly like the runtime,
+    // which compares MCP_CAPABILITY_PROFILE case-insensitively.
+    for (value, deploy) in [
+        ("OPERATIONS", DoctorCheckStatus::Pass),
+        ("Operations", DoctorCheckStatus::Pass),
+        ("ADMIN", DoctorCheckStatus::Pass),
+        ("Admin", DoctorCheckStatus::Pass),
+        ("READ-ONLY", DoctorCheckStatus::Fail),
+        ("Read-Only", DoctorCheckStatus::Fail),
+    ] {
+        let mut env = HashMap::new();
+        env.insert("COOLIFY_URL".into(), "https://coolify.example".into());
+        env.insert("COOLIFY_TOKEN".into(), "token".into());
+        env.insert("MCP_TRANSPORT".into(), "http".into());
+        env.insert("MCP_CAPABILITY_PROFILE".into(), value.into());
+        let checks = report_for(&env).await;
+        assert_eq!(
+            status_of(&checks, "capability_profile"),
+            DoctorCheckStatus::Pass,
+            "profile {value} must be recognized"
+        );
+        assert_eq!(
+            status_of(&checks, "deploy_ability"),
+            deploy,
+            "profile {value} deploy ability must match runtime"
+        );
+    }
+
+    // A truly unknown value must still fail.
+    let mut env = HashMap::new();
+    env.insert("COOLIFY_URL".into(), "https://coolify.example".into());
+    env.insert("COOLIFY_TOKEN".into(), "token".into());
+    env.insert("MCP_CAPABILITY_PROFILE".into(), "superuser".into());
+    let checks = report_for(&env).await;
+    assert_eq!(
+        status_of(&checks, "capability_profile"),
+        DoctorCheckStatus::Fail
+    );
+    assert_eq!(
+        status_of(&checks, "deploy_ability"),
+        DoctorCheckStatus::Fail
+    );
+}
+
 /// End-to-end through real HTTP: the fetcher below performs actual requests
 /// with redirects disabled, exactly like the production doctor adapter, so
 /// status, Content-Type, Location, and body shape must survive to classification.
