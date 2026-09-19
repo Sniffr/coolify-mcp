@@ -125,3 +125,35 @@ All workspace tests passed: 28 passed; 0 failed
 ```
 
 Fix-round files include `crates/safety/src/masking.rs`, `crates/safety/src/untrusted.rs`, `crates/safety/src/audit.rs`, `crates/safety/src/lib.rs`, `crates/safety/tests/masking_tests.rs`, `crates/safety/tests/audit_tests.rs`, `crates/coolify-api/src/client.rs`, and `crates/coolify-api/tests/client_error_tests.rs`.
+
+## Fix Round 2 (nonce isolation)
+
+### TDD evidence
+
+Added tests requiring two calls with the same supplied nonce to have independent delimiters and requiring malicious nonce text not to influence the generated boundary. Before implementation:
+
+```text
+$ cargo test -p safety
+untrusted_frame_generates_independent_delimiters_and_neutralizes_payload_boundaries ... FAILED
+assertion `left != right` failed
+left: "[BEGIN UNTRUSTED LOG OUTPUT:caller-nonce]"
+right: "[BEGIN UNTRUSTED LOG OUTPUT:caller-nonce]"
+```
+
+### Fix and verification
+
+`frame_untrusted(text, _supplied_nonce)` now ignores the compatibility argument entirely and generates a fresh 128-bit random nonce on every call. The cached boundary regex continues to replace boundary-shaped payload text before the real delimiters are added. A compatibility comment documents why the unused parameter remains public.
+
+```text
+$ cargo test -p safety
+11 passed; 0 failed
+
+$ cargo fmt --all -- --check
+PASS
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+Finished successfully; no warnings
+
+$ cargo test --workspace
+All workspace tests passed: 28 passed; 0 failed
+```
