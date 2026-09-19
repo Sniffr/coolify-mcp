@@ -5,11 +5,19 @@ impl CoolifyClient {
         &self,
         kind: &str,
         uuid: &str,
-    ) -> Result<Vec<crate::BoundedPayload>, CoolifyApiError> {
-        self.request_json(Method::GET, &format!("/{kind}/{uuid}/envs"), None)
-            .await
+    ) -> Result<Vec<crate::EnvironmentVariable>, CoolifyApiError> {
+        self.request_json(
+            Method::GET,
+            &format!(
+                "/{}/{}/envs",
+                crate::encode_segment(kind),
+                crate::encode_segment(uuid)
+            ),
+            None,
+        )
+        .await
     }
-    pub async fn system(&self) -> Result<crate::BoundedPayload, CoolifyApiError> {
+    pub async fn system(&self) -> Result<crate::SystemSummary, CoolifyApiError> {
         self.request_json(Method::GET, "/system", None).await
     }
 }

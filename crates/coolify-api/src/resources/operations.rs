@@ -18,7 +18,7 @@ impl CoolifyClient {
         uuid: &str,
         action: &str,
         body: Option<Value>,
-    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
+    ) -> Result<crate::ActionResult, CoolifyApiError> {
         self.request_json(
             Method::POST,
             &format!(
@@ -36,10 +36,12 @@ impl CoolifyClient {
         storage_uuid: Option<&str>,
         method: Method,
         body: Option<Value>,
-    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
+    ) -> Result<crate::ActionResult, CoolifyApiError> {
         let path = format!(
             "/applications/{uuid}/storages{}",
-            storage_uuid.map(|x| format!("/{x}")).unwrap_or_default()
+            storage_uuid
+                .map(|x| format!("/{}", crate::encode_segment(x)))
+                .unwrap_or_default()
         );
         self.request_json(method, &path, body).await
     }
@@ -49,10 +51,12 @@ impl CoolifyClient {
         tag_uuid: Option<&str>,
         method: Method,
         body: Option<Value>,
-    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
+    ) -> Result<crate::ActionResult, CoolifyApiError> {
         let path = format!(
             "/applications/{uuid}/tags{}",
-            tag_uuid.map(|x| format!("/{x}")).unwrap_or_default()
+            tag_uuid
+                .map(|x| format!("/{}", crate::encode_segment(x)))
+                .unwrap_or_default()
         );
         self.request_json(method, &path, body).await
     }
@@ -62,9 +66,17 @@ impl CoolifyClient {
         action: &str,
         method: Method,
         body: Option<Value>,
-    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
-        self.request_json(method, &format!("/databases/{uuid}/{action}"), body)
-            .await
+    ) -> Result<crate::ActionResult, CoolifyApiError> {
+        self.request_json(
+            method,
+            &format!(
+                "/databases/{}/{}",
+                crate::encode_segment(uuid),
+                crate::encode_segment(action)
+            ),
+            body,
+        )
+        .await
     }
     pub async fn service_action(
         &self,
@@ -72,31 +84,47 @@ impl CoolifyClient {
         action: &str,
         method: Method,
         body: Option<Value>,
-    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
-        self.request_json(method, &format!("/services/{uuid}/{action}"), body)
-            .await
+    ) -> Result<crate::ActionResult, CoolifyApiError> {
+        self.request_json(
+            method,
+            &format!(
+                "/services/{}/{}",
+                crate::encode_segment(uuid),
+                crate::encode_segment(action)
+            ),
+            body,
+        )
+        .await
     }
     pub async fn project_environments(
         &self,
         uuid: &str,
-    ) -> Result<Vec<crate::BoundedPayload>, CoolifyApiError> {
-        self.request_json(Method::GET, &format!("/projects/{uuid}/environments"), None)
-            .await
+    ) -> Result<Vec<crate::EnvironmentSummary>, CoolifyApiError> {
+        self.request_json(
+            Method::GET,
+            &format!("/projects/{}/environments", crate::encode_segment(uuid)),
+            None,
+        )
+        .await
     }
     pub async fn system_action(
         &self,
         action: &str,
         body: Option<Value>,
-    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
-        self.request_json(Method::POST, &format!("/system/{action}"), body)
-            .await
+    ) -> Result<crate::ActionResult, CoolifyApiError> {
+        self.request_json(
+            Method::POST,
+            &format!("/system/{}", crate::encode_segment(action)),
+            body,
+        )
+        .await
     }
     pub async fn s3_storage(
         &self,
         uuid: Option<&str>,
         method: Method,
         body: Option<Value>,
-    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
+    ) -> Result<crate::ActionResult, CoolifyApiError> {
         let path = format!("/s3{}", uuid.map(|x| format!("/{x}")).unwrap_or_default());
         self.request_json(method, &path, body).await
     }
@@ -105,7 +133,7 @@ impl CoolifyClient {
         uuid: Option<&str>,
         method: Method,
         body: Option<Value>,
-    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
+    ) -> Result<crate::ActionResult, CoolifyApiError> {
         let path = format!("/tags{}", uuid.map(|x| format!("/{x}")).unwrap_or_default());
         self.request_json(method, &path, body).await
     }

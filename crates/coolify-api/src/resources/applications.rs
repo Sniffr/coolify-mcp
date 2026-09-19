@@ -26,15 +26,19 @@ impl CoolifyClient {
         &self,
         kind: &str,
         body: Value,
-    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
-        self.request_json(Method::POST, &format!("/applications/{kind}"), Some(body))
-            .await
+    ) -> Result<crate::ActionResult, CoolifyApiError> {
+        self.request_json(
+            Method::POST,
+            &format!("/applications/{}", crate::encode_segment(kind)),
+            Some(body),
+        )
+        .await
     }
     pub async fn update_application(
         &self,
         uuid: &str,
         body: Value,
-    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
+    ) -> Result<crate::ActionResult, CoolifyApiError> {
         self.request_json(
             Method::PATCH,
             &format!("/applications/{}", crate::encode_segment(uuid)),
@@ -45,7 +49,7 @@ impl CoolifyClient {
     pub async fn delete_application(
         &self,
         uuid: &str,
-    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
+    ) -> Result<crate::ActionResult, CoolifyApiError> {
         self.request_json(
             Method::DELETE,
             &format!("/applications/{}", crate::encode_segment(uuid)),
@@ -61,7 +65,10 @@ impl CoolifyClient {
         let v: Value = self
             .request_json(
                 Method::GET,
-                &format!("/applications/{uuid}/logs?lines={lines}"),
+                &format!(
+                    "/applications/{}/logs?lines={lines}",
+                    crate::encode_segment(uuid)
+                ),
                 None,
             )
             .await?;

@@ -9,21 +9,57 @@ pub struct ActionResult {
     #[serde(default)]
     pub message: Option<String>,
 }
-#[derive(Debug, Clone, Serialize)]
-pub struct BoundedPayload {
-    pub data: Value,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvironmentSummary {
+    #[serde(default)]
+    pub uuid: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
 }
-impl<'de> Deserialize<'de> for BoundedPayload {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        Ok(Self {
-            data: Value::deserialize(d)?,
-        })
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledTaskSummary {
+    #[serde(default)]
+    pub uuid: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
 }
-impl From<Value> for BoundedPayload {
-    fn from(data: Value) -> Self {
-        Self { data }
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChildSummary {
+    #[serde(default)]
+    pub uuid: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemSummary {
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct S3StorageSummary {
+    #[serde(default)]
+    pub uuid: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticSummary {
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub issues: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageSummary {

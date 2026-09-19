@@ -17,13 +17,21 @@ impl CoolifyClient {
         &self,
         kind: &str,
         body: Value,
-    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
-        self.request_json(Method::POST, &format!("/databases/{kind}"), Some(body))
-            .await
+    ) -> Result<crate::ActionResult, CoolifyApiError> {
+        self.request_json(
+            Method::POST,
+            &format!("/databases/{}", crate::encode_segment(kind)),
+            Some(body),
+        )
+        .await
     }
     pub async fn database_logs(&self, uuid: &str) -> Result<String, CoolifyApiError> {
-        self.request_json::<Value>(Method::GET, &format!("/databases/{uuid}/logs"), None)
-            .await
-            .map(crate::unwrap_logs)
+        self.request_json::<Value>(
+            Method::GET,
+            &format!("/databases/{}/logs", crate::encode_segment(uuid)),
+            None,
+        )
+        .await
+        .map(crate::unwrap_logs)
     }
 }

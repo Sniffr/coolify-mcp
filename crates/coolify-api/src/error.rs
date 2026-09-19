@@ -52,6 +52,7 @@ pub enum CoolifyApiError {
         status: u16,
         body: String,
         retry_after: Option<String>,
+        path: Option<String>,
     },
     Decode(String),
 }
@@ -105,6 +106,15 @@ impl CoolifyApiError {
             status: details.status,
             body: details.body,
             retry_after: details.retry_after,
+            path: None,
+        }
+    }
+    pub(crate) fn http_at_path(details: HttpErrorDetails, path: &str) -> Self {
+        Self::Http {
+            status: details.status,
+            body: details.body,
+            retry_after: details.retry_after,
+            path: Some(path.to_owned()),
         }
     }
     pub(crate) fn is_method_or_routing(&self, _path: &str) -> bool {
@@ -117,7 +127,9 @@ impl CoolifyApiError {
     }
     pub fn hint(&self) -> Option<&'static str> {
         match self {
-            Self::Http { status, body, .. } => crate::error_hint_with_body(*status, "", body),
+            Self::Http {
+                status, body, path, ..
+            } => crate::error_hint_with_body(*status, path.as_deref().unwrap_or(""), body),
             _ => None,
         }
     }

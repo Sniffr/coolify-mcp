@@ -129,8 +129,9 @@ impl CoolifyClient {
             .map(str::to_owned);
         let body = read_bounded(response).await.unwrap_or_default();
         let body = String::from_utf8_lossy(&body).into_owned();
-        Err(CoolifyApiError::http(
+        Err(CoolifyApiError::http_at_path(
             HttpErrorDetails::new(status, body, retry_after).redact_token(&token),
+            path,
         ))
     }
 }

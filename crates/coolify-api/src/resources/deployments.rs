@@ -32,7 +32,11 @@ impl CoolifyClient {
     }
     pub async fn deployment_logs(&self, uuid: &str) -> Result<String, CoolifyApiError> {
         let value: Value = self
-            .request_json(Method::GET, &format!("/deployments/{uuid}/logs"), None)
+            .request_json(
+                Method::GET,
+                &format!("/deployments/{}/logs", crate::encode_segment(uuid)),
+                None,
+            )
             .await?;
         Ok(crate::unwrap_logs(value))
     }
@@ -65,8 +69,12 @@ impl CoolifyClient {
     pub async fn cancel_deployment(
         &self,
         uuid: &str,
-    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
-        self.request_json(Method::POST, &format!("/deployments/{uuid}/cancel"), None)
-            .await
+    ) -> Result<crate::ActionResult, CoolifyApiError> {
+        self.request_json(
+            Method::POST,
+            &format!("/deployments/{}/cancel", crate::encode_segment(uuid)),
+            None,
+        )
+        .await
     }
 }

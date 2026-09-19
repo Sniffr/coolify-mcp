@@ -6,8 +6,12 @@ impl CoolifyClient {
         self.request_json(Method::GET, "/projects", None).await
     }
     pub async fn get_project(&self, uuid: &str) -> Result<ProjectSummary, CoolifyApiError> {
-        self.request_json(Method::GET, &format!("/projects/{uuid}"), None)
-            .await
+        self.request_json(
+            Method::GET,
+            &format!("/projects/{}", crate::encode_segment(uuid)),
+            None,
+        )
+        .await
     }
     pub async fn create_project(&self, body: Value) -> Result<ProjectSummary, CoolifyApiError> {
         self.request_json(Method::POST, "/projects", Some(body))
@@ -18,16 +22,17 @@ impl CoolifyClient {
         uuid: &str,
         body: Value,
     ) -> Result<ProjectSummary, CoolifyApiError> {
-        self.request_json(Method::PATCH, &format!("/projects/{uuid}"), Some(body))
-            .await
+        self.request_json(
+            Method::PATCH,
+            &format!("/projects/{}", crate::encode_segment(uuid)),
+            Some(body),
+        )
+        .await
     }
-    pub async fn delete_project(
-        &self,
-        uuid: &str,
-    ) -> Result<crate::BoundedPayload, CoolifyApiError> {
+    pub async fn delete_project(&self, uuid: &str) -> Result<crate::ActionResult, CoolifyApiError> {
         self.request_json(
             Method::DELETE,
-            &format!("/projects/{uuid}"),
+            &format!("/projects/{}", crate::encode_segment(uuid)),
             Some(serde_json::json!({"delete_volumes":false})),
         )
         .await

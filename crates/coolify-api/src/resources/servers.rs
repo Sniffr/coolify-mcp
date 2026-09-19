@@ -14,13 +14,17 @@ impl CoolifyClient {
         .await
     }
     pub async fn get_server(&self, uuid: &str) -> Result<ServerSummary, CoolifyApiError> {
-        self.request_json(Method::GET, &format!("/servers/{uuid}"), None)
-            .await
+        self.request_json(
+            Method::GET,
+            &format!("/servers/{}", crate::encode_segment(uuid)),
+            None,
+        )
+        .await
     }
     pub async fn validate_server(&self, uuid: &str) -> Result<serde_json::Value, CoolifyApiError> {
         self.post_with_legacy_get_fallback(
             crate::LegacyEndpoint::ServersValidate,
-            &format!("/servers/{uuid}/validate"),
+            &format!("/servers/{}/validate", crate::encode_segment(uuid)),
             None,
         )
         .await

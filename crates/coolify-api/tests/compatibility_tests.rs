@@ -122,11 +122,21 @@ fn route_matrix_has_unique_explicit_contracts() {
     let mut keys = std::collections::HashSet::new();
     for route in ROUTE_MATRIX {
         assert!(keys.insert((route.group, route.action)));
-        assert!(!route.method.is_empty());
+        assert!(!route.method.contains('|'));
         assert!(!route.path.contains(" and "));
         assert!(!route.projection.is_empty());
-        if route.method.contains("{") {
-            assert!(!route.required_args.is_empty());
+        assert!(!route.compatibility.is_empty());
+        let placeholders = route
+            .path
+            .split('{')
+            .skip(1)
+            .map(|part| part.split('}').next().unwrap());
+        for placeholder in placeholders {
+            assert!(
+                route.required_args.contains(&placeholder),
+                "missing required arg {placeholder} for {}",
+                route.path
+            );
         }
         if route.safety == SafetyClass::Read {
             assert!(
@@ -158,6 +168,42 @@ fn known_error_hints_are_stable() {
     );
     assert!(error_hint_with_body(404, "/applications/x", "Resource not found").is_some());
     assert!(error_hint_with_body(404, "/applications/x", "Not found.").is_none());
+}
+
+#[tokio::test]
+async fn deployment_operations_use_typed_paths_and_projections() {
+    let item = r#"[{"uuid":"d","deployment_uuid":"dep","status":"finished"}]"#;
+    let one = r#"{"uuid":"d","deployment_uuid":"dep","status":"finished"}"#;
+    let (base, seen) = fake_server(vec![(200, item), (200, r#"{"logs":"tail"}"#), (200, one)]);
+    let client = client_at(base);
+    assert_eq!(
+        client.list_deployments().await.unwrap()[0].deployment_uuid,
+        "dep"
+    );
+    assert_eq!(client.deployment_logs("d").await.unwrap(), "tail");
+    assert_eq!(
+        client
+            .cancel_deployment("d")
+            .await
+            .unwrap()
+            .status
+            .as_deref(),
+        Some("finished")
+    );
+    let requests = seen.lock().unwrap().clone();
+    assert!(requests[0].starts_with("GET /api/v1/deployments"));
+    assert!(requests[1].starts_with("GET /api/v1/deployments/d/logs"));
+    assert!(requests[2].starts_with("POST /api/v1/deployments/d/cancel"));
+}
+
+#[tokio::test]
+async fn resource_segments_are_encoded() {
+    let (base, seen) = fake_server(vec![(200, r#"{"uuid":"x","name":"safe"}"#)]);
+    let client = client_at(base);
+    let _ = client.get_application("a/b ?#").await.unwrap();
+    let request = seen.lock().unwrap()[0].clone();
+    assert!(request.contains("/applications/a%2Fb%20%3F%23"));
+    assert!(!request.contains("/applications/a/b"));
 }
 
 #[tokio::test]
