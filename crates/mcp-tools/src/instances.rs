@@ -6,11 +6,15 @@ use url::Url;
 #[derive(Clone)]
 pub struct Instance {
     name: String,
+    base_url: Url,
     pub client: Arc<CoolifyClient>,
 }
 impl Instance {
     pub fn name(&self) -> &str {
         &self.name
+    }
+    pub fn base_url(&self) -> &Url {
+        &self.base_url
     }
 }
 impl std::fmt::Debug for Instance {
@@ -47,6 +51,7 @@ impl InstanceRegistry {
                 .into_iter()
                 .map(|name| Instance {
                     name,
+                    base_url: Url::parse("http://127.0.0.1").unwrap(),
                     client: Arc::new(
                         CoolifyClient::new(CoolifyConfig {
                             base_url: Url::parse("http://127.0.0.1").unwrap(),
@@ -94,7 +99,7 @@ impl InstanceRegistry {
             let source = coolify_api::TokenSource::from_env(&env)
                 .map_err(|_| InstanceRegistryError::Invalid)?;
             let config = CoolifyConfig {
-                base_url: url,
+                base_url: url.clone(),
                 token_source: source,
                 custom_headers: Default::default(),
                 timeout: std::time::Duration::from_secs(45),
@@ -102,6 +107,7 @@ impl InstanceRegistry {
             let client = CoolifyClient::new(config).map_err(|_| InstanceRegistryError::Client)?;
             entries.push(Instance {
                 name: value.name,
+                base_url: url,
                 client: Arc::new(client),
             });
         }
@@ -127,6 +133,20 @@ impl InstanceRegistry {
             .find(|x| x.name == name)
             .cloned()
             .ok_or(InstanceRegistryError::Unknown)
+    }
+    pub fn projection(&self) -> Vec<serde_json::Value> {
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                serde_json::json!({
+                    "name": item.name,
+                    "base_url": item.base_url.as_str().trim_end_matches('/'),
+                    "default": index == 0,
+                    "configured": true,
+                })
+            })
+            .collect()
     }
 }
 #[derive(Deserialize)]

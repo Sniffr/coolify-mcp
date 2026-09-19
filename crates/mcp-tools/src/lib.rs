@@ -456,7 +456,11 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
         "hetzner" => fixed_request(c, "/hetzner", a, n).await,
         "scheduled_tasks" => fixed_request(c, "/scheduled-tasks", a, n).await,
         "teams" => fixed_request(c, "/teams", a, n).await,
-        "search_docs" => fixed_request(c, "/docs", a, n).await,
+        "search_docs" => {
+            let query = a.get("query").and_then(Value::as_str).unwrap_or("");
+            let limit = a.get("per_page").and_then(Value::as_u64).unwrap_or(10).min(50) as usize;
+            Ok(json!(crate::docs_search::DocsSearchEngine::embedded().search(query, limit)))
+        },
         "get_infrastructure_overview" => fixed_request(c, "/resources", a, n).await,
         "find_issues" => fixed_request(c, "/diagnostics", a, n).await,
         "bulk_env_update" => c
@@ -490,7 +494,10 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
     }
 }
 fn registered(name: &str) -> bool {
-    name == "list_instances" || DEFAULT_TOOL_ROSTER.iter().any(|t| t.name == name)
+    DEFAULT_TOOL_ROSTER.iter().any(|t| t.name == name)
+}
+fn unsupported(message: &str) -> ToolResult {
+    ToolResult { text: serde_json::to_string(&json!({"error":{"code":"MCP_UNSUPPORTED","message":message,"details":null},"is_error":true})).unwrap(), is_error: true }
 }
 fn validate_input(name: &str, args: &Value) -> Result<Value, ToolResult> {
     let typed: CommonInput = serde_json::from_value(args.clone())
@@ -616,6 +623,15 @@ pub async fn call_tool(ctx: ToolContext, name: &str, args: Value) -> ToolResult 
         }
         result
     };
+    if name == "list_instances" {
+        if ctx.instance_registry.as_ref().is_none_or(|r| !r.is_fleet()) {
+            return finish(unsupported(
+                "list_instances requires a fleet-enabled InstanceRegistry",
+            ));
+        }
+        let registry = ctx.instance_registry.as_ref().expect("checked above");
+        return finish(ToolResult::ok(json!(registry.projection())));
+    }
     if !registered(name) {
         return finish(ToolResult::err("tool is not registered"));
     }
@@ -638,12 +654,29 @@ pub async fn call_tool(ctx: ToolContext, name: &str, args: Value) -> ToolResult 
     {
         return finish(ToolResult::err("confirmation required for this action"));
     }
-    if let Some(i) = typed_args.get("instance").and_then(Value::as_str)
-        && ctx.instance.as_deref() != Some(i)
-    {
-        return finish(ToolResult::err("unknown instance name"));
-    }
-    let result = dispatch(&ctx.client, name, &typed_args)
+    let client = if let Some(i) = typed_args.get("instance").and_then(Value::as_str) {
+        let Some(registry) = ctx.instance_registry.as_ref() else {
+            return finish(unsupported(
+                "instance routing requires a fleet-enabled InstanceRegistry",
+            ));
+        };
+        match registry.select(i) {
+            Ok(instance) => instance.client,
+            Err(_) => return finish(ToolResult::err("unknown instance name")),
+        }
+    } else {
+        if ctx
+            .instance_registry
+            .as_ref()
+            .is_some_and(|registry| registry.is_fleet())
+        {
+            return finish(unsupported(
+                "an instance selector is required in fleet mode",
+            ));
+        }
+        ctx.client.clone()
+    };
+    let result = dispatch(&client, name, &typed_args)
         .await
         .map(ToolResult::ok)
         .unwrap_or_else(|e| e);

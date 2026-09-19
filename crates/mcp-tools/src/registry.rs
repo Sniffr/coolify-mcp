@@ -217,5 +217,6 @@ pub struct ToolContext {
     pub policy: CapabilityProfile,
     pub audit: Option<Arc<dyn AuditHook>>,
     pub instance: Option<String>,
+    pub instance_registry: Option<Arc<InstanceRegistry>>,
     pub request_metadata: serde_json::Map<String, serde_json::Value>,
 }

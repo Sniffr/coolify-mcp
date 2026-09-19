@@ -13,3 +13,4 @@ thiserror = "2"
 async-trait = "0.1"
 percent-encoding = "2"
 url = "2"
+tokio = { version = "1", features = ["macros", "rt"] }

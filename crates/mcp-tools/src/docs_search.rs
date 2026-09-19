@@ -1,5 +1,6 @@
 use safety::frame_untrusted;
-#[derive(Clone, Debug, PartialEq)]
+use serde::Serialize;
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DocHit {
     pub title: String,
     pub text: String,

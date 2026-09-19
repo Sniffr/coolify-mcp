@@ -106,5 +106,12 @@ pub fn schema_for(name: &str, fleet: bool) -> Value {
         out["properties"]["action"] = json!({"type":"string","enum":values});
         out["required"] = json!(["action"]);
     }
+    if fleet && name != "list_instances" {
+        out["required"] = if out["required"].is_array() {
+            json!(["action", "instance"])
+        } else {
+            json!(["instance"])
+        };
+    }
     out
 }
