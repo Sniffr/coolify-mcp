@@ -22,3 +22,21 @@ Implemented and committed as requested.
 - OAuth endpoints are exposed under `/oauth/*` alongside discovery metadata; aliases to any deployment-specific standard endpoint paths may be desirable for client interoperability.
 - MCP session IDs are currently generated per successful response rather than persisted in a session store; full resumable Streamable HTTP session lifecycle should be strengthened in a subsequent task.
 - Startup currently requires Coolify configuration for both modes, consistent with the existing API configuration contract.
+
+## Fix round 1 — 2026-09-19
+
+Addressed review findings:
+
+- Reworked stdio processing to consume frames incrementally from `BufReader`, preserving the first-frame framing mode, responding and flushing before the input stream closes, and returning `-32700 Parse error` for malformed JSON. Added a duplex-stream end-to-end test.
+- Added actual Axum request and request-body timeout layers using the configured 30-second timeout, while retaining the 5 MiB body limit.
+- Added bounded per-IP rate limiting for registration, authorization, and token endpoints with safe `429`/`Retry-After` responses.
+- Added MCP content negotiation validation, bearer-protected GET behavior, session ID validation, and an in-memory session store so IDs remain stable across requests rather than being minted on every response.
+- Wired `MCP_OAUTH_STATE_FILE` (default `/data/oauth-state.json`) through `OAuthProvider::with_store`; persistence failures produce degraded `/healthz` while discovery remains public. OAuth mutations persist through the provider store.
+- Added degraded-health and rate-limit tests; all prior transport tests remain passing.
+
+Fix-round verification:
+
+- `cargo test -p transport` — passed (10 transport tests).
+- `cargo test --workspace` — passed.
+- `cargo clippy --workspace --all-targets -- -D warnings` — passed.
+- `cargo fmt --all` — completed.

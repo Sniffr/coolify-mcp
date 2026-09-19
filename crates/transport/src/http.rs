@@ -37,6 +37,7 @@ pub struct HttpConfig {
     pub oauth: Arc<OAuthProvider>,
     pub max_body_bytes: usize,
     pub request_timeout: Duration,
+    pub persistence_available: bool,
 }
 impl HttpConfig {
     pub fn for_tests() -> Self {
@@ -47,6 +48,7 @@ impl HttpConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
             max_body_bytes: 5 * 1024 * 1024,
             request_timeout: Duration::from_secs(30),
+            persistence_available: true,
         }
     }
 }

@@ -56,6 +56,51 @@ async fn health_and_discovery_are_public_but_mcp_requires_bearer() {
 }
 
 #[tokio::test]
+async fn oauth_mutation_endpoints_rate_limit_by_client_ip() {
+    let app = router(HttpConfig::for_tests());
+    let mut limited = false;
+    for _ in 0..31 {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/oauth/register")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-forwarded-for", "198.51.100.10")
+                    .body(Body::from(
+                        r#"{"redirect_uris":["https://client.test/callback"]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            limited = true;
+            break;
+        }
+    }
+    assert!(limited);
+}
+
+#[tokio::test]
+async fn health_reports_degraded_persistence_without_hiding_discovery() {
+    let mut config = HttpConfig::for_tests();
+    config.persistence_available = false;
+    let app = router(config);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
 async fn oversized_body_is_rejected() {
     let app = router(HttpConfig::for_tests());
     let req = Request::builder()

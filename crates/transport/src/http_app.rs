@@ -1,9 +1,8 @@
 use crate::http::HttpConfig;
-use axum::extract::DefaultBodyLimit;
 use axum::{
     Router,
     body::Bytes,
-    extract::{Query, State},
+    extract::{DefaultBodyLimit, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Redirect, Response},
     routing::{get, post},
@@ -12,17 +11,57 @@ use mcp_tools::{McpApplication, ToolResult};
 use oauth::{AuthorizeRequest, OAuthError, RegistrationRequest, TokenRequest};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+use tower_http::timeout::{RequestBodyTimeoutLayer, TimeoutLayer};
 
+#[derive(Clone)]
+struct RateLimiter {
+    entries: Arc<Mutex<HashMap<String, (Instant, u32)>>>,
+    max_entries: usize,
+    max_requests: u32,
+    window: Duration,
+}
+impl RateLimiter {
+    fn new() -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(HashMap::new())),
+            max_entries: 1024,
+            max_requests: 30,
+            window: Duration::from_secs(60),
+        }
+    }
+    fn allow(&self, key: String) -> bool {
+        let mut e = self.entries.lock().unwrap();
+        let now = Instant::now();
+        if e.len() >= self.max_entries && !e.contains_key(&key) {
+            e.retain(|_, (at, _)| now.duration_since(*at) < self.window);
+            if e.len() >= self.max_entries {
+                return false;
+            }
+        }
+        let slot = e.entry(key).or_insert((now, 0));
+        if now.duration_since(slot.0) >= self.window {
+            *slot = (now, 0)
+        };
+        slot.1 += 1;
+        slot.1 <= self.max_requests
+    }
+}
 #[derive(Clone)]
 struct AppState {
     app: Arc<dyn McpApplication>,
     config: HttpConfig,
+    rate: RateLimiter,
+    sessions: Arc<Mutex<HashSet<String>>>,
 }
 struct EmptyApp;
 impl McpApplication for EmptyApp {
     fn tools(&self) -> Vec<mcp_tools::ToolSpec> {
-        Vec::new()
+        vec![]
     }
     fn call<'a>(
         &'a self,
@@ -37,7 +76,6 @@ impl McpApplication for EmptyApp {
         })
     }
 }
-
 pub fn router(config: HttpConfig) -> Router {
     router_with_app(config, EmptyApp)
 }
@@ -45,7 +83,10 @@ pub fn router_with_app<A: McpApplication + 'static>(config: HttpConfig, app: A) 
     let state = AppState {
         app: Arc::new(app),
         config,
+        rate: RateLimiter::new(),
+        sessions: Arc::new(Mutex::new(HashSet::new())),
     };
+    let request_timeout = state.config.request_timeout;
     Router::new()
         .route("/healthz", get(health))
         .route("/.well-known/oauth-authorization-server", get(discovery))
@@ -58,10 +99,29 @@ pub fn router_with_app<A: McpApplication + 'static>(config: HttpConfig, app: A) 
         .route("/oauth/token", post(token))
         .route("/mcp", post(mcp).get(mcp_get))
         .layer(DefaultBodyLimit::max(state.config.max_body_bytes))
+        .layer(RequestBodyTimeoutLayer::new(request_timeout))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            request_timeout,
+        ))
         .with_state(state)
 }
-async fn health() -> impl IntoResponse {
-    Json(json!({"status":"ok"}))
+async fn health(State(s): State<AppState>) -> Response {
+    let status = if s.config.persistence_available {
+        "ok"
+    } else {
+        "degraded"
+    };
+    let code = if s.config.persistence_available {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        code,
+        Json(json!({"status":status,"persistence":s.config.persistence_available})),
+    )
+        .into_response()
 }
 async fn discovery(State(s): State<AppState>) -> impl IntoResponse {
     Json(
@@ -73,7 +133,27 @@ async fn protected_resource(State(s): State<AppState>) -> impl IntoResponse {
         json!({"resource":format!("{}/mcp",s.config.public_url),"authorization_servers":[s.config.public_url.to_string()]}),
     )
 }
-async fn register(State(s): State<AppState>, Json(req): Json<RegistrationRequest>) -> Response {
+fn client_key(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .or_else(|| headers.get("x-real-ip"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .chars()
+        .take(128)
+        .collect()
+}
+fn limited(s: &AppState, headers: &HeaderMap, endpoint: &str) -> bool {
+    s.rate.allow(format!("{endpoint}:{}", client_key(headers)))
+}
+async fn register(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RegistrationRequest>,
+) -> Response {
+    if !limited(&s, &headers, "register") {
+        return rate_error();
+    }
     match s.config.oauth.register(req) {
         Ok(v) => (StatusCode::CREATED, Json(v)).into_response(),
         Err(e) => oauth_error(e),
@@ -90,7 +170,14 @@ struct AuthorizeQuery {
     code_challenge: String,
     code_challenge_method: String,
 }
-async fn authorize(State(s): State<AppState>, Query(q): Query<AuthorizeQuery>) -> Response {
+async fn authorize(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<AuthorizeQuery>,
+) -> Response {
+    if !limited(&s, &headers, "authorize") {
+        return rate_error();
+    }
     let req = AuthorizeRequest {
         client_id: q.client_id,
         redirect_uri: q.redirect_uri,
@@ -123,8 +210,12 @@ struct TokenForm {
 }
 async fn token(
     State(s): State<AppState>,
+    headers: HeaderMap,
     axum::extract::Form(f): axum::extract::Form<TokenForm>,
 ) -> Response {
+    if !limited(&s, &headers, "token") {
+        return rate_error();
+    }
     let req = TokenRequest {
         grant_type: f.grant_type,
         code: f.code.unwrap_or_default(),
@@ -148,10 +239,19 @@ async fn token(
         Err(e) => oauth_error(e),
     }
 }
+fn rate_error() -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [("retry-after", "60")],
+        Json(json!({"error":"rate_limited","error_description":"rate limit exceeded"})),
+    )
+        .into_response()
+}
 fn oauth_error(e: OAuthError) -> Response {
-    let status = match e {
-        OAuthError::InvalidClient => StatusCode::UNAUTHORIZED,
-        _ => StatusCode::BAD_REQUEST,
+    let status = if matches!(e, OAuthError::InvalidClient) {
+        StatusCode::UNAUTHORIZED
+    } else {
+        StatusCode::BAD_REQUEST
     };
     (
         status,
@@ -170,18 +270,72 @@ fn authorized(headers: &HeaderMap, s: &AppState) -> Result<String, StatusCode> {
         .verify_bearer(value, &format!("{}/mcp", s.config.public_url))
         .map_err(|_| StatusCode::UNAUTHORIZED)
 }
-async fn mcp_get() -> Response {
-    (
-        StatusCode::METHOD_NOT_ALLOWED,
-        Json(json!({"error":"POST required"})),
-    )
-        .into_response()
+fn accepts_json(headers: &HeaderMap) -> bool {
+    headers
+        .get("accept")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(',').any(|x| {
+                let x = x.trim();
+                x == "*/*"
+                    || x.starts_with("application/json")
+                    || x.starts_with("text/event-stream")
+            })
+        })
+}
+fn content_json(headers: &HeaderMap) -> bool {
+    headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(';')
+                .next()
+                .is_some_and(|x| x.trim().eq_ignore_ascii_case("application/json"))
+        })
+}
+async fn mcp_get(State(s): State<AppState>, headers: HeaderMap) -> Response {
+    if authorized(&headers, &s).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"invalid bearer token"})),
+        )
+            .into_response();
+    }
+    if !accepts_json(&headers) {
+        return (
+            StatusCode::NOT_ACCEPTABLE,
+            Json(json!({"error":"acceptable Accept header required"})),
+        )
+            .into_response();
+    }
+    let Some(id) = headers.get("mcp-session-id").and_then(|v| v.to_str().ok()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"Mcp-Session-Id required"})),
+        )
+            .into_response();
+    };
+    if !s.sessions.lock().unwrap().contains(id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"unknown MCP session"})),
+        )
+            .into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
     if authorized(&headers, &s).is_err() {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error":"invalid bearer token"})),
+        )
+            .into_response();
+    }
+    if !content_json(&headers) || !accepts_json(&headers) {
+        return (
+            StatusCode::NOT_ACCEPTABLE,
+            Json(json!({"error":"Content-Type application/json and acceptable Accept required"})),
         )
             .into_response();
     }
@@ -198,7 +352,20 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
     if request.get("id").is_none() {
         return StatusCode::ACCEPTED.into_response();
     }
-    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    let provided = headers
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    if let Some(id) = &provided
+        && !s.sessions.lock().unwrap().contains(id)
+    {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"unknown MCP session"})),
+        )
+            .into_response();
+    }
+    let id = request["id"].clone();
     let method = request.get("method").and_then(Value::as_str).unwrap_or("");
     let response = match method {
         "initialize" => {
@@ -219,13 +386,17 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
         }
         _ => json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Method not found"}}),
     };
+    let session = provided.unwrap_or_else(|| {
+        let id = uuid::Uuid::new_v4().to_string();
+        s.sessions.lock().unwrap().insert(id.clone());
+        id
+    });
     let mut response = Json(response).into_response();
     response
         .headers_mut()
         .insert("content-type", "application/json".parse().unwrap());
-    response.headers_mut().insert(
-        "mcp-session-id",
-        format!("{}", uuid::Uuid::new_v4()).parse().unwrap(),
-    );
+    response
+        .headers_mut()
+        .insert("mcp-session-id", session.parse().unwrap());
     response
 }

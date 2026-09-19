@@ -91,16 +91,35 @@ async fn main() {
                 std::process::exit(2);
             }
         };
-        let oauth = Arc::new(oauth::OAuthProvider::new(
+        let state_path = std::path::PathBuf::from(
+            env.get("MCP_OAUTH_STATE_FILE")
+                .cloned()
+                .unwrap_or_else(|| "/data/oauth-state.json".into()),
+        );
+        let (oauth, persistence_available) = match oauth::OAuthProvider::with_store(
             public_url.to_string(),
             "/mcp".into(),
-        ));
+            state_path,
+        ) {
+            Ok(provider) => (Arc::new(provider), true),
+            Err(error) => {
+                eprintln!("OAuth persistence unavailable; HTTP health will be degraded: {error}");
+                (
+                    Arc::new(oauth::OAuthProvider::new(
+                        public_url.to_string(),
+                        "/mcp".into(),
+                    )),
+                    false,
+                )
+            }
+        };
         let cfg = transport::HttpConfig {
             public_url,
             bind,
             oauth,
             max_body_bytes: 5 * 1024 * 1024,
             request_timeout: Duration::from_secs(30),
+            persistence_available,
         };
         if let Err(e) = transport::run_http(app, cfg).await {
             eprintln!("HTTP transport error: {e}");
