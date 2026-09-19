@@ -19,8 +19,16 @@ pub enum UrlError {
     Invalid,
 }
 pub fn normalize_public_url(raw: &str) -> Result<Url, UrlError> {
+    normalize_public_url_with_insecure(raw, false)
+}
+
+/// Normalize a public URL, allowing plain HTTP only for explicitly local acceptance runs.
+pub fn normalize_public_url_with_insecure(
+    raw: &str,
+    allow_insecure: bool,
+) -> Result<Url, UrlError> {
     let mut url = Url::parse(raw).map_err(|_| UrlError::Invalid)?;
-    if url.scheme() != "https" {
+    if url.scheme() != "https" && !(allow_insecure && url.scheme() == "http") {
         return Err(UrlError::Insecure);
     }
     if url.host_str().is_none() || url.query().is_some() || url.fragment().is_some() {
@@ -98,7 +106,7 @@ pub async fn run_http<A: mcp_tools::McpApplication + 'static>(
     let mut shutdown = Box::pin(shutdown_signal());
     let mut connections = tokio::task::JoinSet::new();
     loop {
-        tokio::select! {_=&mut shutdown=>break,Some(_)=connections.join_next(),if !connections.is_empty()=>{},accepted=listener.accept()=>{let (stream,peer)=accepted?;let mut make=router.clone().into_make_service_with_connect_info::<SocketAddr>();let service=match make.call(peer).await{Ok(s)=>s,Err(_)=>continue};let timeout=config.header_timeout;connections.spawn(async move{let io=hyper_util::rt::TokioIo::new(stream);let mut builder=hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new()).http1_only();builder.http1().header_read_timeout(timeout);let _=builder.serve_connection_with_upgrades(io,hyper_util::service::TowerToHyperService::new(service)).await;});}}
+        tokio::select! {_=&mut shutdown=>break,Some(_)=connections.join_next(),if !connections.is_empty()=>{},accepted=listener.accept()=>{let (stream,peer)=accepted?;let mut make=router.clone().into_make_service_with_connect_info::<SocketAddr>();let service=match make.call(peer).await{Ok(s)=>s,Err(_)=>continue};let timeout=config.header_timeout;connections.spawn(async move{let io=hyper_util::rt::TokioIo::new(stream);let mut builder=hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new()).http1_only(); builder.http1().timer(hyper_util::rt::TokioTimer::new()); builder.http1().header_read_timeout(timeout);let _=builder.serve_connection_with_upgrades(io,hyper_util::service::TowerToHyperService::new(service)).await;});}}
     }
     let drain = async { while connections.join_next().await.is_some() {} };
     let _ = tokio::time::timeout(DRAIN_TIMEOUT, drain).await;

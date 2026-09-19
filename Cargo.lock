@@ -1376,6 +1376,7 @@ checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
 name = "sniffr-coolify-mcp"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "coolify-api",
  "doctor",
  "mcp-tools",
@@ -1384,9 +1385,11 @@ dependencies = [
  "safety",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
  "transport",
+ "url",
 ]
 
 [[package]]

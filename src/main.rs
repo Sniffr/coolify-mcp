@@ -147,7 +147,11 @@ async fn main() {
                 std::process::exit(2);
             }
         };
-        let public_url = match transport::normalize_public_url(raw) {
+        let public_url = match transport::normalize_public_url_with_insecure(
+            raw,
+            env.get("MCP_ALLOW_INSECURE_HTTP")
+                .is_some_and(|v| v.eq_ignore_ascii_case("true")),
+        ) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("configuration error: {e}");

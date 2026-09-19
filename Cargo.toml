@@ -24,4 +24,19 @@ oauth = { path = "crates/oauth" }
 transport = { path = "crates/transport" }
 mcp-tools = { path = "crates/mcp-tools" }
 doctor = { path = "crates/doctor" }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+base64 = "0.22"
+sha2 = "0.10"
+url = "2"
+
+[[bin]]
+name = "fake-coolify"
+path = "tests/fake-coolify/server.rs"
+
+[[bin]]
+name = "stdio-interop"
+path = "tests/client-interop/stdio_client.rs"
+
+[[bin]]
+name = "http-oauth-interop"
+path = "tests/client-interop/http_oauth.rs"

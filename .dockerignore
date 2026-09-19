@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+!.env.example
+.superpowers
+target
+.tmp
+.DS_Store
+__pycache__
+*.pyc

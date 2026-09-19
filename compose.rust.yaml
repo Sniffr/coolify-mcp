@@ -1,0 +1,25 @@
+services:
+  coolify-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.rust
+    image: sniffr-coolify-mcp:rust
+    init: true
+    user: "10001:10001"
+    ports:
+      - "8080:8080"
+    environment:
+      MCP_TRANSPORT: http
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://127.0.0.1:8080}
+      MCP_ALLOW_INSECURE_HTTP: ${MCP_ALLOW_INSECURE_HTTP:-true}
+      COOLIFY_BASE_URL: ${COOLIFY_BASE_URL:-http://host.docker.internal:19000}
+      COOLIFY_ACCESS_TOKEN: ${COOLIFY_ACCESS_TOKEN:-fixture-token}
+    volumes:
+      - oauth-data:/data
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -r /data || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+volumes:
+  oauth-data:
