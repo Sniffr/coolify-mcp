@@ -24,9 +24,14 @@ Verified results:
 - `docker secret ls` and `docker config ls` report that the node is not a Swarm manager; no alternative approved secret injection mechanism was verified.
 - `curl --fail --silent --show-error https://mcp.social.dpdns.org/healthz` failed with TLS alert `internal error`.
 
-## Blockers and decision
+## Step outcomes and blockers
 
-The target proxy/HTTPS route is not configured, and a host secret injection mechanism for the Coolify URL/token and OAuth key material is unavailable or unverified. Therefore Steps 2–5 were intentionally not attempted: no image was transferred, no container was started, no proxy was changed, and no credentials were requested, read, printed, or transmitted.
+- **Step 2 (transfer/build): not attempted.** No image or build artifact was transferred, and no credentials were requested, read, printed, or transmitted.
+- **Step 3 (start/configure): not attempted.** No container, persistent volume, proxy route, or host configuration was changed.
+- **Step 4 (public health/OAuth discovery): attempted and blocked.** The public health request reached TLS/route validation but failed with `tlsv1 alert internal error`; because the target Caddy route is absent, the health and OAuth discovery responses could not be validated.
+- **Step 5 (real OAuth/MCP smoke): not attempted.** It was correctly withheld because public HTTPS and secret injection prerequisites were unavailable.
+
+The target proxy/HTTPS route is not configured, and a host secret injection mechanism for the Coolify URL/token and OAuth key material is unavailable or unverified. No remote mutations were performed.
 
 The concrete public host used throughout is `mcp.social.dpdns.org` under wildcard `*.social.dpdns.org`.
 
