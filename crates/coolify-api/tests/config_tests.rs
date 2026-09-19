@@ -39,6 +39,40 @@ fn missing_values_are_named_and_never_leak_values() {
 }
 
 #[test]
+fn token_file_wins_over_both_inline_tokens() {
+    let path = std::env::temp_dir().join(format!("coolify-config-token-{}", std::process::id()));
+    std::fs::write(&path, "file-token\n").unwrap();
+    let config = config_from_env(
+        &env(&[
+            ("COOLIFY_BASE_URL", "https://example.test"),
+            ("COOLIFY_ACCESS_TOKEN_FILE", path.to_str().unwrap()),
+            ("COOLIFY_ACCESS_TOKEN", "access-token"),
+            ("COOLIFY_TOKEN", "legacy-token"),
+        ]),
+        false,
+    )
+    .unwrap();
+    assert_eq!(config.token_source.current().unwrap(), "file-token");
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn empty_canonical_values_fall_back_to_legacy_values() {
+    let config = config_from_env(
+        &env(&[
+            ("COOLIFY_BASE_URL", "  "),
+            ("COOLIFY_URL", "https://legacy.example///"),
+            ("COOLIFY_ACCESS_TOKEN", ""),
+            ("COOLIFY_TOKEN", "legacy-token"),
+        ]),
+        false,
+    )
+    .unwrap();
+    assert_eq!(config.base_url.as_str(), "https://legacy.example/");
+    assert_eq!(config.token_source.current().unwrap(), "legacy-token");
+}
+
+#[test]
 fn invalid_url_and_non_http_scheme_are_rejected_without_values() {
     for value in ["not a url", "file:///tmp/coolify"] {
         let error = config_from_env(

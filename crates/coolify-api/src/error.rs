@@ -1,5 +1,4 @@
 use std::fmt;
-use thiserror::Error;
 
 pub const MAX_BODY_BYTES: usize = 10_000;
 
@@ -13,10 +12,28 @@ impl HttpErrorDetails {
     pub fn new(status: u16, body: String, retry_after: Option<String>) -> Self {
         Self {
             status,
-            body: body.chars().take(MAX_BODY_BYTES).collect(),
+            body: truncate_utf8(body, MAX_BODY_BYTES),
             retry_after,
         }
     }
+
+    pub(crate) fn redact_token(mut self, token: &str) -> Self {
+        if !token.is_empty() {
+            self.body = self.body.replace(token, "[redacted]");
+        }
+        self
+    }
+}
+
+fn truncate_utf8(value: String, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_owned()
 }
 impl fmt::Debug for HttpErrorDetails {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -28,26 +45,43 @@ impl fmt::Debug for HttpErrorDetails {
     }
 }
 
-#[derive(Error)]
 pub enum CoolifyApiError {
-    #[error("configuration error: {0}")]
     Config(String),
-    #[error("transport error: {0}")]
     Transport(String),
-    #[error("HTTP {status}: {body}{retry}", retry = retry_suffix(.retry_after))]
     Http {
         status: u16,
         body: String,
         retry_after: Option<String>,
     },
-    #[error("response decode error: {0}")]
     Decode(String),
 }
+
+impl fmt::Display for CoolifyApiError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Config(_) => f.write_str("configuration error"),
+            Self::Transport(_) => f.write_str("transport error"),
+            Self::Http {
+                status,
+                retry_after,
+                ..
+            } => {
+                write!(f, "HTTP {status}")?;
+                if let Some(retry_after) = retry_after {
+                    write!(f, " (Retry-After: {retry_after})")?;
+                }
+                Ok(())
+            }
+            Self::Decode(_) => f.write_str("response decode error"),
+        }
+    }
+}
+impl std::error::Error for CoolifyApiError {}
 impl fmt::Debug for CoolifyApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Config(message) => f.debug_tuple("Config").field(message).finish(),
-            Self::Transport(message) => f.debug_tuple("Transport").field(message).finish(),
+            Self::Config(_) => f.debug_tuple("Config").field(&"[redacted]").finish(),
+            Self::Transport(_) => f.debug_tuple("Transport").field(&"[redacted]").finish(),
             Self::Http {
                 status,
                 retry_after,
@@ -58,15 +92,9 @@ impl fmt::Debug for CoolifyApiError {
                 .field("body", &"[redacted]")
                 .field("retry_after", retry_after)
                 .finish(),
-            Self::Decode(message) => f.debug_tuple("Decode").field(message).finish(),
+            Self::Decode(_) => f.debug_tuple("Decode").field(&"[redacted]").finish(),
         }
     }
-}
-fn retry_suffix(value: &Option<String>) -> String {
-    value
-        .as_ref()
-        .map(|v| format!(" (Retry-After: {v})"))
-        .unwrap_or_default()
 }
 impl CoolifyApiError {
     pub fn config(message: impl Into<String>) -> Self {

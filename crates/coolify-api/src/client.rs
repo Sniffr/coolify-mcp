@@ -3,7 +3,7 @@ use reqwest::{
     Client, Method,
     header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
-use serde::{Serialize, de::DeserializeOwned};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 pub struct CoolifyClient {
@@ -41,25 +41,20 @@ impl CoolifyClient {
         if !is_json {
             return Err(CoolifyApiError::Decode("response was not JSON".into()));
         }
-        response
-            .json()
+        let bytes = read_bounded(response)
             .await
-            .map_err(|e| CoolifyApiError::Decode(e.to_string()))
+            .map_err(|e| CoolifyApiError::Decode(e.to_string()))?;
+        serde_json::from_slice(&bytes).map_err(|e| CoolifyApiError::Decode(e.to_string()))
     }
     pub async fn request_text(
         &self,
         method: Method,
         path: &str,
     ) -> Result<String, CoolifyApiError> {
-        Ok(self
-            .send(method, path, None)
-            .await?
-            .text()
+        let bytes = read_bounded(self.send(method, path, None).await?)
             .await
-            .map_err(|e| CoolifyApiError::Transport(e.to_string()))?
-            .chars()
-            .take(MAX_BODY_BYTES)
-            .collect())
+            .map_err(|e| CoolifyApiError::Transport(e.to_string()))?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
     pub async fn get_version(&self) -> Result<String, CoolifyApiError> {
         self.request_text(Method::GET, "/version")
@@ -113,22 +108,25 @@ impl CoolifyClient {
             .get("retry-after")
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
-        let body = response
-            .text()
-            .await
-            .unwrap_or_default()
-            .chars()
-            .take(MAX_BODY_BYTES)
-            .collect();
-        Err(CoolifyApiError::http(HttpErrorDetails::new(
-            status,
-            body,
-            retry_after,
-        )))
+        let body = read_bounded(response).await.unwrap_or_default();
+        let body = String::from_utf8_lossy(&body).into_owned();
+        Err(CoolifyApiError::http(
+            HttpErrorDetails::new(status, body, retry_after).redact_token(&token),
+        ))
     }
 }
 
-#[allow(dead_code)]
-fn _serialize<T: Serialize>(value: &T) -> Result<Value, serde_json::Error> {
-    serde_json::to_value(value)
+async fn read_bounded(mut response: reqwest::Response) -> Result<Vec<u8>, reqwest::Error> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        let remaining = MAX_BODY_BYTES.saturating_sub(bytes.len());
+        bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+        if bytes.len() == MAX_BODY_BYTES {
+            break;
+        }
+    }
+    while !bytes.is_empty() && std::str::from_utf8(&bytes).is_err() {
+        bytes.pop();
+    }
+    Ok(bytes)
 }
