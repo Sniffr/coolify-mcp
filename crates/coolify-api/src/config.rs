@@ -32,6 +32,8 @@ pub enum ConfigError {
     InvalidScheme,
     #[error("missing COOLIFY_ACCESS_TOKEN or COOLIFY_TOKEN")]
     MissingToken,
+    #[error("COOLIFY_ACCESS_TOKEN_FILE is set but empty")]
+    EmptyTokenFilePath,
     #[error("token configuration error")]
     Token(#[source] TokenSourceError),
 }
@@ -55,6 +57,7 @@ pub fn config_from_env(
     }
     let token_source = TokenSource::from_env(env).map_err(|e| match e {
         TokenSourceError::Missing => ConfigError::MissingToken,
+        TokenSourceError::EmptyPath => ConfigError::EmptyTokenFilePath,
         other => ConfigError::Token(other),
     })?;
     Ok(CoolifyConfig {

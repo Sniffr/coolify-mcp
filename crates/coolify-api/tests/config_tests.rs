@@ -57,6 +57,25 @@ fn token_file_wins_over_both_inline_tokens() {
 }
 
 #[test]
+fn explicitly_empty_token_file_path_is_rejected_without_falling_back() {
+    let error = config_from_env(
+        &env(&[
+            ("COOLIFY_BASE_URL", "https://example.test"),
+            ("COOLIFY_ACCESS_TOKEN_FILE", "  "),
+            ("COOLIFY_ACCESS_TOKEN", "access-secret"),
+            ("COOLIFY_TOKEN", "legacy-secret"),
+        ]),
+        false,
+    )
+    .unwrap_err();
+    assert!(matches!(error, ConfigError::EmptyTokenFilePath));
+    let text = error.to_string();
+    assert!(text.contains("COOLIFY_ACCESS_TOKEN_FILE"));
+    assert!(!text.contains("access-secret"));
+    assert!(!text.contains("legacy-secret"));
+}
+
+#[test]
 fn empty_canonical_values_fall_back_to_legacy_values() {
     let config = config_from_env(
         &env(&[

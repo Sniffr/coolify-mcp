@@ -11,6 +11,8 @@ use thiserror::Error;
 pub enum TokenSourceError {
     #[error("token is missing (set COOLIFY_ACCESS_TOKEN or COOLIFY_TOKEN)")]
     Missing,
+    #[error("COOLIFY_ACCESS_TOKEN_FILE is set but empty")]
+    EmptyPath,
     #[error("could not read token file")]
     Read(#[source] std::io::Error),
     #[error("token file is empty")]
@@ -29,10 +31,10 @@ enum TokenInner {
 
 impl TokenSource {
     pub fn from_env(env: &HashMap<String, String>) -> Result<Self, TokenSourceError> {
-        if let Some(path) = env
-            .get("COOLIFY_ACCESS_TOKEN_FILE")
-            .filter(|v| !v.trim().is_empty())
-        {
+        if let Some(path) = env.get("COOLIFY_ACCESS_TOKEN_FILE") {
+            if path.trim().is_empty() {
+                return Err(TokenSourceError::EmptyPath);
+            }
             return Self::from_file(path);
         }
         let token = env

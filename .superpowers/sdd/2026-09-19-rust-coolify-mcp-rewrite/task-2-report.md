@@ -124,3 +124,45 @@ git status --short
 ```
 
 Before the focused commit, only the intended source/tests/Cargo.toml changes and root `Cargo.lock` were modified; generated `target/` output was removed.
+
+## Fix round 2 (empty token-file path)
+
+An explicitly present but whitespace-only `COOLIFY_ACCESS_TOKEN_FILE` is now rejected deterministically as `ConfigError::EmptyTokenFilePath`. It does not fall back to either inline token. A non-empty file path retains file-source precedence and existing file loading behavior. The error names `COOLIFY_ACCESS_TOKEN_FILE` and contains neither inline token value.
+
+### Fix-round 2 TDD evidence
+
+Red command after adding the focused regression test and before adding the new error variant:
+
+```text
+cargo test -p coolify-api --test config_tests
+```
+
+Result: expected compile failure because `ConfigError::EmptyTokenFilePath` was not yet defined.
+
+Green focused command:
+
+```text
+cargo test -p coolify-api --test config_tests
+```
+
+Result: 6 passed, 0 failed.
+
+### Fix-round 2 verification
+
+```text
+cargo fmt --all
+```
+
+Completed successfully.
+
+```text
+cargo test --workspace
+```
+
+Result: all workspace unit, integration, and doc tests passed. `coolify-api` client tests: 6 passed; configuration tests: 6 passed; token-source tests: 2 passed; workspace smoke test passed.
+
+```text
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Result: completed successfully with no warnings.
