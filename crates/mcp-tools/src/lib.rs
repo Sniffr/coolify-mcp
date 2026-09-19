@@ -3,6 +3,7 @@ mod annotations;
 pub mod handlers;
 mod registry;
 pub mod schemas;
+use crate::schemas::CommonInput;
 pub use annotations::ToolAnnotations;
 use coolify_api::{CoolifyApiError, CoolifyClient};
 pub use registry::{
@@ -19,7 +20,10 @@ pub struct ToolResult {
 }
 impl ToolResult {
     fn ok(v: Value) -> Self {
-        let mut envelope = json!({"data":v});
+        let mut envelope = json!({"data":v,"_actions":[]});
+        if envelope["data"].is_array() {
+            envelope["_pagination"] = json!({"page":1,"per_page":50});
+        }
         let encoded = serde_json::to_string(&envelope).unwrap_or_default();
         if encoded.len() > 200_000 {
             envelope = json!({"data":{"truncated":true,"preview":encoded.chars().take(199_000).collect::<String>()},"_actions":[]});
@@ -30,10 +34,8 @@ impl ToolResult {
         }
     }
     fn err(s: impl Into<String>) -> Self {
-        Self {
-            text: format!("Error: {}", s.into()),
-            is_error: true,
-        }
+        let message = s.into();
+        Self { text:serde_json::to_string(&json!({"error":{"code":"MCP_TOOL_ERROR","message":message,"details":null},"is_error":true})).unwrap(), is_error:true }
     }
 }
 fn api(e: CoolifyApiError) -> ToolResult {
@@ -95,7 +97,7 @@ fn fixed_method(name: &str, action: Option<&str>) -> Method {
         ) => Method::GET,
         (_, Some("get" | "list" | "logs" | "search")) => Method::GET,
         (_, Some("delete" | "remove")) => Method::DELETE,
-        (_, Some("start" | "stop" | "restart" | "cancel" | "deploy")) => Method::POST,
+        (_, Some("start" | "stop" | "restart" | "cancel" | "deploy" | "create")) => Method::POST,
         _ => Method::PATCH,
     }
 }
@@ -388,9 +390,12 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
             .map(|v| json!(v))
             .map_err(api),
         "env_vars" => c
-            .application_envs(id(a, "uuid")?)
+            .request_value(
+                fixed_method(n, a.get("action").and_then(Value::as_str)),
+                &format!("/applications/{}/envs", seg(id(a, "uuid")?)),
+                typed_body(a),
+            )
             .await
-            .map(|v| json!(v))
             .map_err(api),
         "storages" => c
             .application_storage(
@@ -474,6 +479,11 @@ fn registered(name: &str) -> bool {
     DEFAULT_TOOL_ROSTER.iter().any(|t| t.name == name)
 }
 fn validate_input(name: &str, args: &Value) -> Result<(), ToolResult> {
+    let typed: CommonInput = serde_json::from_value(args.clone())
+        .map_err(|_| ToolResult::err("invalid typed arguments"))?;
+    if typed.instance.is_some() {
+        return Err(ToolResult::err("instance routing is unavailable"));
+    }
     let Some(obj) = args.as_object() else {
         return Err(ToolResult::err("arguments must be an object"));
     };
@@ -507,6 +517,29 @@ fn validate_input(name: &str, args: &Value) -> Result<(), ToolResult> {
     if let Some(k) = obj.keys().find(|k| !common.contains(&k.as_str())) {
         return Err(ToolResult::err(format!("unknown argument '{k}'")));
     }
+    let action_tools = [
+        "application",
+        "database",
+        "service",
+        "deployment",
+        "projects",
+        "control",
+        "system",
+        "database_backups",
+        "storages",
+        "tags",
+        "cloud_tokens",
+        "private_keys",
+        "github_apps",
+        "hetzner",
+        "scheduled_tasks",
+        "environments",
+        "env_vars",
+        "bulk_env_update",
+    ];
+    if action_tools.contains(&name) && obj.get("action").and_then(Value::as_str).is_none() {
+        return Err(ToolResult::err("action is required"));
+    }
     let allowed = match name {
         "application" => &[
             "get", "create", "update", "delete", "start", "stop", "restart", "move", "migrate",
@@ -522,6 +555,14 @@ fn validate_input(name: &str, args: &Value) -> Result<(), ToolResult> {
         "projects" => &["list", "get", "create", "update", "delete"][..],
         "control" => &["start", "stop", "restart"][..],
         "system" => &["enable", "disable", "restart"][..],
+        "database_backups" => &["list", "get", "create", "update", "delete", "executions"][..],
+        "storages" => &["list", "get", "create", "update", "delete"][..],
+        "tags" => &["list", "create", "delete"][..],
+        "cloud_tokens" | "private_keys" | "github_apps" | "hetzner" | "scheduled_tasks" => {
+            &["list", "get", "create", "update", "delete"][..]
+        }
+        "environments" | "env_vars" => &["list", "get", "create", "update", "delete"][..],
+        "bulk_env_update" => &["update"][..],
         _ => &[][..],
     };
     if let Some(a) = obj.get("action").and_then(Value::as_str)
