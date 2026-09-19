@@ -25,6 +25,6 @@ fn readonly_omits_writes_and_fleet_adds_only_selector() {
         CapabilityProfile::Operations,
         Some(&InstanceRegistry::new(vec!["a".into(), "b".into()])),
     );
-    assert_eq!(fleet.len(), 45);
-    assert!(!fleet.iter().any(|tool| tool.name == "list_instances"));
+    assert_eq!(fleet.len(), 46);
+    assert!(fleet.iter().any(|tool| tool.name == "list_instances"));
 }

@@ -1,0 +1,8 @@
+{
+  "_attribution": "Derived from the Coolify documentation; regenerate from the upstream docs index when documentation changes.",
+  "documents": [
+    {"title":"Applications","text":"Deploy and troubleshoot Coolify applications."},
+    {"title":"Deployments","text":"Deployment logs describe build and runtime failures."},
+    {"title":"Servers","text":"Servers provide infrastructure health and resources."}
+  ]
+}

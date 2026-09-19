@@ -1,16 +1,21 @@
 //! MCP tool registry and typed Coolify handlers.
 mod annotations;
+pub mod docs_search;
 pub mod handlers;
+pub mod instances;
+pub mod prompts;
 mod registry;
+pub mod resources;
 pub mod schemas;
 use crate::schemas::CommonInput;
 pub use annotations::ToolAnnotations;
 use coolify_api::{CoolifyApiError, CoolifyClient};
+pub use instances::{Instance, InstanceRegistryError};
 pub use registry::{
     AuditHook, DEFAULT_TOOL_ROSTER, InstanceRegistry, ToolContext, ToolSpec, registered_tools,
 };
 use reqwest::Method;
-use safety::{Action, allows};
+use safety::{Action, allows, frame_untrusted};
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -21,9 +26,6 @@ pub struct ToolResult {
 impl ToolResult {
     fn ok(v: Value) -> Self {
         let mut envelope = json!({"data":v,"_actions":[]});
-        if envelope["data"].is_array() {
-            envelope["_pagination"] = json!({"page":1,"per_page":50});
-        }
         let encoded = serde_json::to_string(&envelope).unwrap_or_default();
         if encoded.len() > 200_000 {
             envelope["data"] = json!({"truncated":true,"preview":encoded.chars().take(199_000).collect::<String>()});
@@ -183,6 +185,7 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
     let page = a.get("page").and_then(Value::as_u64).unwrap_or(1) as u32;
     let per = a.get("per_page").and_then(Value::as_u64).unwrap_or(50) as u32;
     match n {
+        "list_instances" => Ok(json!([])),
         "get_version" => c.get_version().await.map(Value::String).map_err(api),
         "get_mcp_version" => Ok(json!({"version":env!("CARGO_PKG_VERSION")})),
         "list_applications" => c
@@ -204,7 +207,7 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
                     .min(10000) as u32,
             )
             .await
-            .map(|v| json!({"logs":v.chars().take(200000).collect::<String>()}))
+            .map(|v| json!({"logs":frame_untrusted(&v.chars().take(200000).collect::<String>(), "logs")}))
             .map_err(api),
         "application" => {
             let u = id(a, "uuid")?;
@@ -310,7 +313,7 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
                 Some("logs") => c
                     .deployment_logs(u)
                     .await
-                    .map(|v| json!({"logs":v.chars().take(200000).collect::<String>()}))
+                    .map(|v| json!({"logs":frame_untrusted(&v.chars().take(200000).collect::<String>(), "logs")}))
                     .map_err(api),
                 Some("cancel") => c.cancel_deployment(u).await.map(|v| json!(v)).map_err(api),
                 Some("wait") => {
@@ -333,15 +336,15 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
                     if status == "failed"
                         && let Ok(logs) = c.deployment_logs(u).await
                     {
-                        out["logs_tail"] = Value::String(
-                            logs.chars()
-                                .rev()
-                                .take(20_000)
-                                .collect::<String>()
-                                .chars()
-                                .rev()
-                                .collect(),
-                        );
+                        let tail: String = logs
+                            .chars()
+                            .rev()
+                            .take(20_000)
+                            .collect::<String>()
+                            .chars()
+                            .rev()
+                            .collect();
+                        out["logs_tail"] = Value::String(frame_untrusted(&tail, "logs"));
                     }
                     if !terminal {
                         out["next_action"] =
@@ -360,7 +363,7 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
         "logs" => c
             .deployment_logs(id(a, "uuid")?)
             .await
-            .map(|v| json!({"logs":v.chars().take(200000).collect::<String>()}))
+            .map(|v| json!({"logs":frame_untrusted(&v.chars().take(200000).collect::<String>(), "logs")}))
             .map_err(api),
         "projects" => match a.get("action").and_then(Value::as_str) {
             Some("get") => c
@@ -487,14 +490,11 @@ async fn dispatch(c: &CoolifyClient, n: &str, a: &Value) -> Result<Value, ToolRe
     }
 }
 fn registered(name: &str) -> bool {
-    DEFAULT_TOOL_ROSTER.iter().any(|t| t.name == name)
+    name == "list_instances" || DEFAULT_TOOL_ROSTER.iter().any(|t| t.name == name)
 }
 fn validate_input(name: &str, args: &Value) -> Result<Value, ToolResult> {
     let typed: CommonInput = serde_json::from_value(args.clone())
         .map_err(|_| ToolResult::err("invalid typed arguments"))?;
-    if typed.instance.is_some() {
-        return Err(ToolResult::err("instance routing is unavailable"));
-    }
     let Some(obj) = args.as_object() else {
         return Err(ToolResult::err("arguments must be an object"));
     };
@@ -599,8 +599,9 @@ fn validate_input(name: &str, args: &Value) -> Result<Value, ToolResult> {
     }
     serde_json::to_value(typed).map_err(|_| ToolResult::err("typed argument encoding failed"))
 }
-fn with_pagination(mut result: ToolResult, page: u32, per_page: u32) -> ToolResult {
-    if let Ok(mut v) = serde_json::from_str::<Value>(&result.text)
+fn with_pagination(mut result: ToolResult, name: &str, page: u32, per_page: u32) -> ToolResult {
+    if matches!(name, "list_applications" | "list_servers")
+        && let Ok(mut v) = serde_json::from_str::<Value>(&result.text)
         && v["data"].is_array()
     {
         v["_pagination"] = json!({"page":page,"per_page":per_page});
@@ -649,6 +650,7 @@ pub async fn call_tool(ctx: ToolContext, name: &str, args: Value) -> ToolResult 
     if !result.is_error {
         return finish(with_pagination(
             result,
+            name,
             typed_args.get("page").and_then(Value::as_u64).unwrap_or(1) as u32,
             typed_args
                 .get("per_page")

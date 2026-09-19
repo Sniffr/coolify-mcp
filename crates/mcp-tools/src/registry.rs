@@ -1,3 +1,4 @@
+pub use crate::instances::InstanceRegistry;
 use crate::{annotations::ToolAnnotations, schemas::schema_for};
 use coolify_api::CoolifyClient;
 use safety::CapabilityProfile;
@@ -137,24 +138,6 @@ impl ToolSpec {
         self.annotations.read_only_hint
     }
 }
-#[derive(Clone, Debug, Default)]
-pub struct InstanceRegistry {
-    pub names: Vec<String>,
-}
-impl InstanceRegistry {
-    pub fn new(names: Vec<String>) -> Self {
-        Self { names }
-    }
-    pub fn is_fleet(&self) -> bool {
-        self.names.len() > 1
-    }
-    pub fn all(&self) -> &[String] {
-        &self.names
-    }
-    pub fn get(&self, n: &str) -> bool {
-        self.names.iter().any(|x| x == n)
-    }
-}
 pub static DEFAULT_TOOL_ROSTER: LazyLock<Vec<ToolSpec>> = LazyLock::new(|| {
     NAMES
         .iter()
@@ -190,10 +173,11 @@ pub fn registered_tools(
     profile: CapabilityProfile,
     fleet: Option<&InstanceRegistry>,
 ) -> Vec<ToolSpec> {
-    // Fleet routing and list_instances belong to Task 6; Task 5 always exposes the default 45.
-    let fleet_mode = false;
-    let _ = fleet;
-    let names: Vec<&str> = NAMES.into_iter().collect();
+    let fleet_mode = fleet.is_some_and(InstanceRegistry::is_fleet);
+    let mut names: Vec<&str> = NAMES.into_iter().collect();
+    if fleet_mode {
+        names.push("list_instances");
+    }
     names
         .into_iter()
         .filter(|n| profile != CapabilityProfile::ReadOnly || READS.contains(n))

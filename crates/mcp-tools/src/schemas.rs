@@ -99,6 +99,9 @@ pub fn schema_for(name: &str, fleet: bool) -> Value {
         _ => None,
     };
     let mut out = json!({"type":"object","properties":properties,"additionalProperties":false});
+    if name == "list_instances" {
+        out["required"] = json!([]);
+    }
     if let Some(values) = actions {
         out["properties"]["action"] = json!({"type":"string","enum":values});
         out["required"] = json!(["action"]);
