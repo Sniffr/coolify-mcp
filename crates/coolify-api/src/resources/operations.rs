@@ -62,6 +62,24 @@ impl CoolifyClient {
         );
         self.request_json(method, &path, body).await
     }
+    pub async fn database_child(
+        &self,
+        uuid: &str,
+        child: &str,
+        child_uuid: Option<&str>,
+        method: Method,
+        body: Option<Value>,
+    ) -> Result<crate::ActionResult, CoolifyApiError> {
+        let path = format!(
+            "/databases/{}/{}/{}",
+            crate::encode_segment(uuid),
+            crate::encode_segment(child),
+            child_uuid.map(crate::encode_segment).unwrap_or_default()
+        )
+        .trim_end_matches('/')
+        .to_owned();
+        self.request_json(method, &path, body).await
+    }
     pub async fn database_action(
         &self,
         uuid: &str,
@@ -79,6 +97,24 @@ impl CoolifyClient {
             body,
         )
         .await
+    }
+    pub async fn service_child(
+        &self,
+        uuid: &str,
+        child: &str,
+        child_uuid: Option<&str>,
+        method: Method,
+        body: Option<Value>,
+    ) -> Result<crate::ActionResult, CoolifyApiError> {
+        let path = format!(
+            "/services/{}/{}/{}",
+            crate::encode_segment(uuid),
+            crate::encode_segment(child),
+            child_uuid.map(crate::encode_segment).unwrap_or_default()
+        )
+        .trim_end_matches('/')
+        .to_owned();
+        self.request_json(method, &path, body).await
     }
     pub async fn service_action(
         &self,

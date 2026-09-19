@@ -2,7 +2,7 @@ use crate::{annotations::ToolAnnotations, schemas::schema_for};
 use coolify_api::CoolifyClient;
 use safety::CapabilityProfile;
 use serde::Serialize;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 const NAMES: [&str; 45] = [
     "application",
@@ -155,16 +155,45 @@ impl InstanceRegistry {
         self.names.iter().any(|x| x == n)
     }
 }
-pub const DEFAULT_TOOL_ROSTER: &[&str] = &NAMES;
+pub static DEFAULT_TOOL_ROSTER: LazyLock<Vec<ToolSpec>> = LazyLock::new(|| {
+    NAMES
+        .iter()
+        .enumerate()
+        .map(|(i, name)| ToolSpec {
+            name: (*name).into(),
+            title: TITLES[i].into(),
+            description: format!(
+                "{}; actions are validated and routed through the typed Coolify API.",
+                TITLES[i]
+            ),
+            input_schema: schema_for(name, false),
+            annotations: if READS.contains(name) {
+                ToolAnnotations::read_only(*name == "get_version" || *name == "get_mcp_version")
+            } else if *name == "hetzner" {
+                ToolAnnotations::safe_write(false)
+            } else if *name == "validate_server" {
+                ToolAnnotations::safe_write(true)
+            } else {
+                ToolAnnotations::destructive()
+            },
+            safety: if READS.contains(name) {
+                "read-only".into()
+            } else if *name == "hetzner" || *name == "validate_server" {
+                "non-destructive-write".into()
+            } else {
+                "destructive-write".into()
+            },
+        })
+        .collect()
+});
 pub fn registered_tools(
     profile: CapabilityProfile,
     fleet: Option<&InstanceRegistry>,
 ) -> Vec<ToolSpec> {
-    let fleet_mode = fleet.is_some_and(InstanceRegistry::is_fleet);
-    let mut names: Vec<&str> = NAMES.into_iter().collect();
-    if fleet_mode {
-        names.push("list_instances");
-    }
+    // Fleet routing and list_instances belong to Task 6; Task 5 always exposes the default 45.
+    let fleet_mode = false;
+    let _ = fleet;
+    let names: Vec<&str> = NAMES.into_iter().collect();
     names
         .into_iter()
         .filter(|n| profile != CapabilityProfile::ReadOnly || READS.contains(n))

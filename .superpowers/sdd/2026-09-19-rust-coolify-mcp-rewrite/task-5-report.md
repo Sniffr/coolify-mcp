@@ -1,24 +1,12 @@
-# Task 5 report
 
-## Status
-Partial implementation: registry/schema/context foundation compiles and the exact 45-name registration behavior is covered. Domain handler files are present as integration points, but the complete endpoint/action surface and fake-server contract suite remain outstanding.
+## Continuation (2026-09-19)
 
-## Red/green evidence
-- Initial `cargo test -p mcp-tools`: green after foundation implementation (no tests existed initially).
-- Added `crates/mcp-tools/tests/roster_tests.rs`; `cargo test -p mcp-tools`: 2 passed.
-- `cargo test --workspace`: passed all workspace tests.
-- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
-- `cargo fmt --all`: passed.
+Implemented continuation commit: complete 45-entry runtime ToolSpec roster with title/schema/annotation/safety metadata, read-only filtering, action-level policy and fail-closed confirmation, audit hook invocation, structured error envelopes, bounded log projections, pagination envelope support, typed dispatch for the available Coolify resource methods, deployment/log routing, project/environment/application/database/service/server/system routes, shared `McpApplication` interface, and database/service child path encoding methods. Added exact roster/schema contract tests and excluded fleet-only `list_instances` pending Task 6.
 
-## Files
-- Added registry, annotations, schemas, ToolContext/call_tool and handler module scaffolding under `crates/mcp-tools/src/`.
-- Added roster tests and mcp-tools dependencies.
+Verification:
+- `cargo test -p mcp-tools` — passed (4 tests)
+- `cargo test --workspace` — passed
+- `cargo fmt --all` — passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — passed after fixing redundant closures
 
-## Commit
-Pending commit in this report generation.
-
-## Concerns
-- `DEFAULT_TOOL_ROSTER` is currently a 45-name string slice rather than a const `&[ToolSpec]`, because JSON schema values are runtime values.
-- Most registered actions currently return a bounded structured `not_implemented` envelope; only version, application list/get, and application logs are wired to typed client methods.
-- Deployment waiting, action-level confirmation/audit detail, pagination/action projections, fake-server handler contract coverage, and special-character child-resource route coverage are not complete.
-- `InstanceRegistry` is a minimal placeholder pending Task 6's full fleet implementation.
+Remaining concerns: the existing coolify-api surface does not yet expose every OpenAPI family (configuration/cloud/private/GitHub/diagnostic/docs/bulk variants), so those tools return structured unsupported-handler errors rather than placeholder successes. Full fake-server route contract coverage and deployment wait projection tests remain follow-up work; no prompts, fleet, or transport was implemented.

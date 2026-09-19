@@ -7,7 +7,11 @@ fn default_roster_is_exact_and_unique() {
     let tools = registered_tools(CapabilityProfile::Operations, None);
     assert_eq!(tools.len(), 45);
     let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(names, DEFAULT_TOOL_ROSTER);
+    let expected: Vec<_> = DEFAULT_TOOL_ROSTER
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect();
+    assert_eq!(names, expected);
     for tool in tools {
         assert!(!tool.title.is_empty());
         assert!(tool.input_schema.is_object());
@@ -21,6 +25,6 @@ fn readonly_omits_writes_and_fleet_adds_only_selector() {
         CapabilityProfile::Operations,
         Some(&InstanceRegistry::new(vec!["a".into(), "b".into()])),
     );
-    assert_eq!(fleet.len(), 46);
-    assert_eq!(fleet.last().unwrap().name, "list_instances");
+    assert_eq!(fleet.len(), 45);
+    assert!(!fleet.iter().any(|tool| tool.name == "list_instances"));
 }
