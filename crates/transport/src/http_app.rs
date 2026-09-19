@@ -2,7 +2,7 @@ use crate::http::HttpConfig;
 use axum::{
     Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, Query, State},
+    extract::{DefaultBodyLimit, Extension, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Redirect, Response},
     routing::{get, post},
@@ -12,7 +12,8 @@ use oauth::{AuthorizeRequest, OAuthError, RegistrationRequest, TokenRequest};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
+    net::SocketAddr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -56,7 +57,7 @@ struct AppState {
     app: Arc<dyn McpApplication>,
     config: HttpConfig,
     rate: RateLimiter,
-    sessions: Arc<Mutex<HashSet<String>>>,
+    sessions: Arc<Mutex<HashMap<String, Instant>>>,
 }
 struct EmptyApp;
 impl McpApplication for EmptyApp {
@@ -84,7 +85,7 @@ pub fn router_with_app<A: McpApplication + 'static>(config: HttpConfig, app: A) 
         app: Arc::new(app),
         config,
         rate: RateLimiter::new(),
-        sessions: Arc::new(Mutex::new(HashSet::new())),
+        sessions: Arc::new(Mutex::new(HashMap::new())),
     };
     let request_timeout = state.config.request_timeout;
     Router::new()
@@ -97,7 +98,7 @@ pub fn router_with_app<A: McpApplication + 'static>(config: HttpConfig, app: A) 
         .route("/oauth/register", post(register))
         .route("/oauth/authorize", get(authorize))
         .route("/oauth/token", post(token))
-        .route("/mcp", post(mcp).get(mcp_get))
+        .route("/mcp", post(mcp).get(mcp_get).delete(mcp_delete))
         .layer(DefaultBodyLimit::max(state.config.max_body_bytes))
         .layer(RequestBodyTimeoutLayer::new(request_timeout))
         .layer(TimeoutLayer::with_status_code(
@@ -107,21 +108,17 @@ pub fn router_with_app<A: McpApplication + 'static>(config: HttpConfig, app: A) 
         .with_state(state)
 }
 async fn health(State(s): State<AppState>) -> Response {
-    let status = if s.config.persistence_available {
-        "ok"
-    } else {
-        "degraded"
-    };
-    let code = if s.config.persistence_available {
+    let healthy = s.config.persistence_available
+        && s.config
+            .persistence_health
+            .load(std::sync::atomic::Ordering::Acquire);
+    let status = if healthy { "ok" } else { "degraded" };
+    let code = if healthy {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-    (
-        code,
-        Json(json!({"status":status,"persistence":s.config.persistence_available})),
-    )
-        .into_response()
+    (code, Json(json!({"status":status,"persistence":healthy}))).into_response()
 }
 async fn discovery(State(s): State<AppState>) -> impl IntoResponse {
     Json(
@@ -133,30 +130,34 @@ async fn protected_resource(State(s): State<AppState>) -> impl IntoResponse {
         json!({"resource":format!("{}/mcp",s.config.public_url),"authorization_servers":[s.config.public_url.to_string()]}),
     )
 }
-fn client_key(headers: &HeaderMap) -> String {
-    headers
-        .get("x-forwarded-for")
-        .or_else(|| headers.get("x-real-ip"))
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown")
-        .chars()
-        .take(128)
-        .collect()
+fn client_key(s: &AppState, headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
+    if s.config.trusted_proxy
+        && let Some(value) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
+    {
+        return value.chars().take(128).collect();
+    }
+    peer.map(|address| address.ip().to_string())
+        .unwrap_or_else(|| "unknown-peer".into())
 }
-fn limited(s: &AppState, headers: &HeaderMap, endpoint: &str) -> bool {
-    s.rate.allow(format!("{endpoint}:{}", client_key(headers)))
+fn limited(s: &AppState, headers: &HeaderMap, peer: Option<SocketAddr>, endpoint: &str) -> bool {
+    s.rate
+        .allow(format!("{endpoint}:{}", client_key(s, headers, peer)))
 }
 async fn register(
     State(s): State<AppState>,
     headers: HeaderMap,
+    peer: Option<Extension<SocketAddr>>,
     Json(req): Json<RegistrationRequest>,
 ) -> Response {
-    if !limited(&s, &headers, "register") {
+    if !limited(&s, &headers, peer.map(|p| p.0), "register") {
         return rate_error();
     }
     match s.config.oauth.register(req) {
         Ok(v) => (StatusCode::CREATED, Json(v)).into_response(),
-        Err(e) => oauth_error(e),
+        Err(e) => {
+            mark_persistence_error(&s, &e);
+            oauth_error(e)
+        }
     }
 }
 #[derive(Deserialize)]
@@ -173,9 +174,10 @@ struct AuthorizeQuery {
 async fn authorize(
     State(s): State<AppState>,
     headers: HeaderMap,
+    peer: Option<Extension<SocketAddr>>,
     Query(q): Query<AuthorizeQuery>,
 ) -> Response {
-    if !limited(&s, &headers, "authorize") {
+    if !limited(&s, &headers, peer.map(|p| p.0), "authorize") {
         return rate_error();
     }
     let req = AuthorizeRequest {
@@ -194,7 +196,10 @@ async fn authorize(
             v.redirect_uri, v.code, v.state
         ))
         .into_response(),
-        Err(e) => oauth_error(e),
+        Err(e) => {
+            mark_persistence_error(&s, &e);
+            oauth_error(e)
+        }
     }
 }
 #[derive(Deserialize)]
@@ -211,9 +216,10 @@ struct TokenForm {
 async fn token(
     State(s): State<AppState>,
     headers: HeaderMap,
+    peer: Option<Extension<SocketAddr>>,
     axum::extract::Form(f): axum::extract::Form<TokenForm>,
 ) -> Response {
-    if !limited(&s, &headers, "token") {
+    if !limited(&s, &headers, peer.map(|p| p.0), "token") {
         return rate_error();
     }
     let req = TokenRequest {
@@ -236,7 +242,10 @@ async fn token(
     };
     match result {
         Ok(v) => Json(v).into_response(),
-        Err(e) => oauth_error(e),
+        Err(e) => {
+            mark_persistence_error(&s, &e);
+            oauth_error(e)
+        }
     }
 }
 fn rate_error() -> Response {
@@ -246,6 +255,13 @@ fn rate_error() -> Response {
         Json(json!({"error":"rate_limited","error_description":"rate limit exceeded"})),
     )
         .into_response()
+}
+fn mark_persistence_error(s: &AppState, error: &OAuthError) {
+    if matches!(error, OAuthError::Persistence(_)) {
+        s.config
+            .persistence_health
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
 }
 fn oauth_error(e: OAuthError) -> Response {
     let status = if matches!(e, OAuthError::InvalidClient) {
@@ -293,6 +309,39 @@ fn content_json(headers: &HeaderMap) -> bool {
                 .is_some_and(|x| x.trim().eq_ignore_ascii_case("application/json"))
         })
 }
+fn cleanup_sessions(s: &AppState) {
+    let now = Instant::now();
+    s.sessions
+        .lock()
+        .unwrap()
+        .retain(|_, seen| now.duration_since(*seen) < s.config.session_ttl);
+}
+fn session_valid(s: &AppState, id: &str) -> bool {
+    if uuid::Uuid::parse_str(id).is_err() {
+        return false;
+    }
+    cleanup_sessions(s);
+    let mut sessions = s.sessions.lock().unwrap();
+    if let Some(seen) = sessions.get_mut(id) {
+        *seen = Instant::now();
+        true
+    } else {
+        false
+    }
+}
+async fn mcp_delete(State(s): State<AppState>, headers: HeaderMap) -> Response {
+    if authorized(&headers, &s).is_err() {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let Some(id) = headers.get("mcp-session-id").and_then(|v| v.to_str().ok()) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    if s.sessions.lock().unwrap().remove(id).is_some() {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
 async fn mcp_get(State(s): State<AppState>, headers: HeaderMap) -> Response {
     if authorized(&headers, &s).is_err() {
         return (
@@ -315,7 +364,7 @@ async fn mcp_get(State(s): State<AppState>, headers: HeaderMap) -> Response {
         )
             .into_response();
     };
-    if !s.sessions.lock().unwrap().contains(id) {
+    if !session_valid(&s, id) {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error":"unknown MCP session"})),
@@ -357,7 +406,7 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
     if let Some(id) = &provided
-        && !s.sessions.lock().unwrap().contains(id)
+        && !session_valid(&s, id)
     {
         return (
             StatusCode::NOT_FOUND,
@@ -386,11 +435,22 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
         }
         _ => json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"Method not found"}}),
     };
-    let session = provided.unwrap_or_else(|| {
-        let id = uuid::Uuid::new_v4().to_string();
-        s.sessions.lock().unwrap().insert(id.clone());
+    let session = if let Some(id) = provided {
         id
-    });
+    } else {
+        cleanup_sessions(&s);
+        let mut sessions = s.sessions.lock().unwrap();
+        if sessions.len() >= s.config.max_sessions {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error":"MCP session capacity reached"})),
+            )
+                .into_response();
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        sessions.insert(id.clone(), Instant::now());
+        id
+    };
     let mut response = Json(response).into_response();
     response
         .headers_mut()

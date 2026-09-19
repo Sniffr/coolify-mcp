@@ -331,6 +331,10 @@ impl OAuthProvider {
             .save(&i.data)
             .map_err(|e| OAuthError::Persistence(e.to_string()))
     }
+    pub fn flush(&self) -> Result<(), OAuthError> {
+        let i = self.inner.lock().unwrap();
+        persist(&i)
+    }
 }
 fn issue(s: &mut PersistedState, gid: &str, cid: &str, res: &str, scope: &str) -> TokenResponse {
     let a = random();

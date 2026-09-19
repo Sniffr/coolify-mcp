@@ -1,6 +1,14 @@
 use oauth::OAuthProvider;
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use thiserror::Error;
+use tower::Service;
 use url::Url;
 
 #[derive(Debug, Error)]
@@ -10,7 +18,6 @@ pub enum UrlError {
     #[error("invalid public URL")]
     Invalid,
 }
-
 pub fn normalize_public_url(raw: &str) -> Result<Url, UrlError> {
     let mut url = Url::parse(raw).map_err(|_| UrlError::Invalid)?;
     if url.scheme() != "https" {
@@ -29,15 +36,19 @@ pub fn normalize_public_url(raw: &str) -> Result<Url, UrlError> {
     }
     Ok(url)
 }
-
 #[derive(Clone)]
 pub struct HttpConfig {
     pub public_url: Url,
     pub bind: SocketAddr,
     pub oauth: Arc<OAuthProvider>,
     pub max_body_bytes: usize,
+    pub header_timeout: Duration,
     pub request_timeout: Duration,
     pub persistence_available: bool,
+    pub persistence_health: Arc<AtomicBool>,
+    pub max_sessions: usize,
+    pub session_ttl: Duration,
+    pub trusted_proxy: bool,
 }
 impl HttpConfig {
     pub fn for_tests() -> Self {
@@ -47,12 +58,16 @@ impl HttpConfig {
             public_url,
             bind: "127.0.0.1:0".parse().unwrap(),
             max_body_bytes: 5 * 1024 * 1024,
+            header_timeout: Duration::from_secs(15),
             request_timeout: Duration::from_secs(30),
             persistence_available: true,
+            persistence_health: Arc::new(AtomicBool::new(true)),
+            max_sessions: 1024,
+            session_ttl: Duration::from_secs(3600),
+            trusted_proxy: false,
         }
     }
 }
-
 #[derive(Debug, Error)]
 pub enum TransportError {
     #[error("transport I/O error")]
@@ -60,13 +75,20 @@ pub enum TransportError {
     #[error("invalid public URL: {0}")]
     Url(#[from] UrlError),
 }
-
 pub async fn run_http<A: mcp_tools::McpApplication + 'static>(
     app: A,
     config: HttpConfig,
 ) -> Result<(), TransportError> {
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
-    axum::serve(listener, crate::http_app::router_with_app(config, app))
-        .await
-        .map_err(|e| std::io::Error::other(e.to_string()).into())
+    let router = crate::http_app::router_with_app(config.clone(), app);
+    let mut shutdown = Box::pin(async {
+        let _ = tokio::signal::ctrl_c().await;
+    });
+    loop {
+        tokio::select! {_=&mut shutdown=>break,accepted=listener.accept()=>{let (stream,peer)=accepted?;let mut make=router.clone().into_make_service_with_connect_info::<SocketAddr>();let service=match make.call(peer).await{Ok(s)=>s,Err(_)=>continue};let timeout=config.header_timeout;tokio::spawn(async move{let io=hyper_util::rt::TokioIo::new(stream);let mut builder=hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());builder.http1().header_read_timeout(timeout);let _=builder.serve_connection_with_upgrades(io,hyper_util::service::TowerToHyperService::new(service)).await;});}}
+    }
+    if config.oauth.flush().is_err() {
+        config.persistence_health.store(false, Ordering::Release);
+    }
+    Ok(())
 }

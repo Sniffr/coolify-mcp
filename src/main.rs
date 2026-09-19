@@ -118,8 +118,15 @@ async fn main() {
             bind,
             oauth,
             max_body_bytes: 5 * 1024 * 1024,
+            header_timeout: Duration::from_secs(15),
             request_timeout: Duration::from_secs(30),
             persistence_available,
+            persistence_health: Arc::new(std::sync::atomic::AtomicBool::new(persistence_available)),
+            max_sessions: 1024,
+            session_ttl: Duration::from_secs(3600),
+            trusted_proxy: env
+                .get("MCP_TRUSTED_PROXY")
+                .is_some_and(|v| v.eq_ignore_ascii_case("true")),
         };
         if let Err(e) = transport::run_http(app, cfg).await {
             eprintln!("HTTP transport error: {e}");

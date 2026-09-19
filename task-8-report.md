@@ -40,3 +40,21 @@ Fix-round verification:
 - `cargo test --workspace` — passed.
 - `cargo clippy --workspace --all-targets -- -D warnings` — passed.
 - `cargo fmt --all` — completed.
+
+## Fix round 2 — 2026-09-19
+
+Addressed remaining lifecycle and security findings:
+
+- Replaced the prior Axum-only listener with a Hyper-util connection loop. Each HTTP/1 connection now applies Hyper's real `header_read_timeout` (15 seconds), distinct from the 30-second request/body timeout layers.
+- Added timeout configuration assertions covering both deadlines.
+- Changed MCP sessions to bounded `HashMap<session_id, last_seen>`, with UUID validation, TTL cleanup, configurable capacity, last-seen refresh, safe capacity rejection, and authenticated `DELETE /mcp` termination.
+- Rate limiting now uses the actual peer address inserted by the connection service. Forwarded IP headers are ignored unless `MCP_TRUSTED_PROXY=true`; spoofed forwarded addresses cannot evade limits.
+- Added shared persistence health state. OAuth persistence failures transition `/healthz` to degraded, and provider flushing is performed during graceful shutdown after SIGINT/CTRL-C.
+- OAuth state remains provider-managed and hash-only; startup continues to validate/load the configured state path.
+
+Fix-round 2 verification:
+
+- `cargo test -p transport` — passed (11 transport tests).
+- `cargo test --workspace` — passed.
+- `cargo clippy --workspace --all-targets -- -D warnings` — passed.
+- `cargo fmt --all` — completed.

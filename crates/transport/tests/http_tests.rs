@@ -7,6 +7,14 @@ use transport::http::{HttpConfig, normalize_public_url};
 use transport::http_app::router;
 
 #[test]
+fn timeout_configuration_keeps_header_and_request_deadlines_distinct() {
+    let config = HttpConfig::for_tests();
+    assert_eq!(config.header_timeout, std::time::Duration::from_secs(15));
+    assert_eq!(config.request_timeout, std::time::Duration::from_secs(30));
+    assert!(config.header_timeout < config.request_timeout);
+}
+
+#[test]
 fn normalizes_public_url_and_rejects_insecure_urls() {
     assert_eq!(
         normalize_public_url("https://example.test/")
@@ -59,7 +67,7 @@ async fn health_and_discovery_are_public_but_mcp_requires_bearer() {
 async fn oauth_mutation_endpoints_rate_limit_by_client_ip() {
     let app = router(HttpConfig::for_tests());
     let mut limited = false;
-    for _ in 0..31 {
+    for index in 0..31 {
         let response = app
             .clone()
             .oneshot(
@@ -67,7 +75,7 @@ async fn oauth_mutation_endpoints_rate_limit_by_client_ip() {
                     .uri("/oauth/register")
                     .method("POST")
                     .header("content-type", "application/json")
-                    .header("x-forwarded-for", "198.51.100.10")
+                    .header("x-forwarded-for", format!("198.51.100.{}", index + 10))
                     .body(Body::from(
                         r#"{"redirect_uris":["https://client.test/callback"]}"#,
                     ))
@@ -85,8 +93,10 @@ async fn oauth_mutation_endpoints_rate_limit_by_client_ip() {
 
 #[tokio::test]
 async fn health_reports_degraded_persistence_without_hiding_discovery() {
-    let mut config = HttpConfig::for_tests();
-    config.persistence_available = false;
+    let config = HttpConfig::for_tests();
+    config
+        .persistence_health
+        .store(false, std::sync::atomic::Ordering::Release);
     let app = router(config);
     let response = app
         .oneshot(
