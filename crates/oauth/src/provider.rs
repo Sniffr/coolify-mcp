@@ -117,8 +117,12 @@ impl OAuthProvider {
             client_name: req.client_name,
         };
         let mut i = self.inner.lock().unwrap();
+        let previous = i.data.clone();
         i.data.clients.insert(hash(&id), c);
-        persist(&i)?;
+        if let Err(error) = persist(&i) {
+            i.data = previous;
+            return Err(error);
+        }
         Ok(RegistrationResponse {
             client_id: id,
             client_secret: secret,
@@ -160,6 +164,8 @@ impl OAuthProvider {
         {
             return Err(OAuthError::InvalidRequest("redirect mismatch".into()));
         }
+        let previous = i.data.clone();
+        let previous_states = i.used_states.clone();
         let claims = verify_state(&i.state_key, &req.state)
             .ok_or_else(|| OAuthError::InvalidRequest("invalid state".into()))?;
         if claims.exp < now()
@@ -184,7 +190,11 @@ impl OAuthProvider {
                 used: false,
             },
         );
-        persist(&i)?;
+        if let Err(error) = persist(&i) {
+            i.data = previous;
+            i.used_states = previous_states;
+            return Err(error);
+        }
         Ok(AuthorizationResponse {
             code,
             state: req.state,
@@ -224,6 +234,7 @@ impl OAuthProvider {
         {
             return Err(OAuthError::InvalidGrant);
         }
+        let previous = i.data.clone();
         i.data.codes.get_mut(&hash(&req.code)).unwrap().used = true;
         let gid = random();
         i.data
@@ -236,7 +247,10 @@ impl OAuthProvider {
             &self.resource,
             &code.scope,
         );
-        persist(&i)?;
+        if let Err(error) = persist(&i) {
+            i.data = previous;
+            return Err(error);
+        }
         Ok(out)
     }
     pub fn refresh(&self, token: &str) -> Result<TokenResponse, OAuthError> {
@@ -258,6 +272,10 @@ impl OAuthProvider {
             })
             .ok_or(OAuthError::InvalidGrant)?;
         let (gid, bad, cid, res, scope) = found;
+        if i.data.grants.get(&gid).is_some_and(|grant| grant.revoked) {
+            return Err(OAuthError::InvalidGrant);
+        }
+        let previous = i.data.clone();
         if bad || res != self.resource {
             if let Some(g) = i.data.grants.get_mut(&gid) {
                 g.revoked = true
@@ -265,14 +283,20 @@ impl OAuthProvider {
             for t in i.data.tokens.values_mut().filter(|t| t.grant_id == gid) {
                 t.revoked = true
             }
-            persist(&i)?;
+            if let Err(error) = persist(&i) {
+                i.data = previous;
+                return Err(error);
+            }
             return Err(OAuthError::InvalidGrant);
         }
         if let Some(t) = i.data.tokens.get_mut(&key) {
             t.rotated = true;
         }
         let out = issue(&mut i.data, &gid, &cid, &res, &scope);
-        persist(&i)?;
+        if let Err(error) = persist(&i) {
+            i.data = previous;
+            return Err(error);
+        }
         Ok(out)
     }
     pub fn verify_bearer(&self, token: &str, resource: &str) -> Result<String, OAuthError> {

@@ -191,3 +191,72 @@ fn expired_authorization_code_is_rejected() {
         .is_err()
     );
 }
+
+#[test]
+fn invalid_secret_and_resource_host_are_rejected() {
+    let p = OAuthProvider::new("https://server.test".into(), "/mcp".into());
+    let c = p
+        .register(RegistrationRequest {
+            redirect_uris: vec!["https://client.test/cb".into()],
+            client_name: None,
+        })
+        .unwrap();
+    let v = "a-secret-verifier-that-is-long-enough-123456789";
+    let ch = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(v));
+    let state = p
+        .create_state(&c.client_id, "https://client.test/cb")
+        .unwrap();
+    assert!(
+        p.authorize(AuthorizeRequest {
+            client_id: c.client_id,
+            redirect_uri: "https://client.test/cb".into(),
+            response_type: "code".into(),
+            resource: "https://attacker.test/mcp".into(),
+            scope: "mcp".into(),
+            state,
+            code_challenge: ch,
+            code_challenge_method: "S256".into()
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn invalid_client_secret_exchange_is_rejected() {
+    let p = OAuthProvider::new("https://server.test".into(), "/mcp".into());
+    let c = p
+        .register(RegistrationRequest {
+            redirect_uris: vec!["https://client.test/cb".into()],
+            client_name: None,
+        })
+        .unwrap();
+    let v = "a-secret-verifier-that-is-long-enough-123456789";
+    let ch = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(v));
+    let a = p
+        .authorize(AuthorizeRequest {
+            client_id: c.client_id.clone(),
+            redirect_uri: "https://client.test/cb".into(),
+            response_type: "code".into(),
+            resource: "https://server.test/mcp".into(),
+            scope: "mcp".into(),
+            state: p
+                .create_state(&c.client_id, "https://client.test/cb")
+                .unwrap(),
+            code_challenge: ch,
+            code_challenge_method: "S256".into(),
+        })
+        .unwrap();
+    assert!(
+        p.exchange_code(TokenRequest {
+            grant_type: "authorization_code".into(),
+            code: a.code,
+            redirect_uri: Some("https://client.test/cb".into()),
+            client_id: c.client_id,
+            client_secret: Some("wrong".into()),
+            code_verifier: Some(v.into()),
+            refresh_token: None,
+            resource: Some("https://server.test/mcp".into())
+        })
+        .is_err()
+    );
+}
