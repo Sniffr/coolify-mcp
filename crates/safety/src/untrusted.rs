@@ -2,17 +2,11 @@ use rand::Rng;
 use regex::Regex;
 use std::sync::OnceLock;
 
-pub fn frame_untrusted(text: &str, supplied_nonce: &str) -> String {
-    let nonce = if !supplied_nonce.is_empty()
-        && supplied_nonce
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-    {
-        supplied_nonce.to_owned()
-    } else {
-        let value: u128 = rand::rng().random();
-        format!("{value:032x}")
-    };
+pub fn frame_untrusted(text: &str, _supplied_nonce: &str) -> String {
+    // The argument is retained only for source compatibility. Never use
+    // caller material in a boundary; each call gets fresh OS-backed entropy.
+    let value: u128 = rand::rng().random();
+    let nonce = format!("{value:032x}");
     let begin = format!("[BEGIN UNTRUSTED LOG OUTPUT:{nonce}]");
     let end = format!("[END UNTRUSTED LOG OUTPUT:{nonce}]");
     static BOUNDARY: OnceLock<Regex> = OnceLock::new();
