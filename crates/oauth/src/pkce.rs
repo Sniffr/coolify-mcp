@@ -14,7 +14,17 @@ pub fn redirect_uri_matches(registered: &str, requested: &str) -> bool {
     let (Ok(a), Ok(b)) = (Url::parse(registered), Url::parse(requested)) else {
         return false;
     };
-    if a.fragment().is_some() || b.fragment().is_some() {
+    if a.fragment().is_some()
+        || b.fragment().is_some()
+        || !a.username().is_empty()
+        || !b.username().is_empty()
+        || a.password().is_some()
+        || b.password().is_some()
+        || a.query().is_some()
+        || b.query().is_some()
+        || a.host_str().is_none()
+        || b.host_str().is_none()
+    {
         return false;
     }
     if a.scheme() != b.scheme()
@@ -27,7 +37,7 @@ pub fn redirect_uri_matches(registered: &str, requested: &str) -> bool {
     if a.scheme() == "http" && !is_loopback(a.host_str()) {
         return a.port() == b.port();
     }
-    if is_loopback(a.host_str()) {
+    if a.scheme() == "http" && is_loopback(a.host_str()) {
         return true;
     }
     a.port() == b.port()
@@ -35,7 +45,13 @@ pub fn redirect_uri_matches(registered: &str, requested: &str) -> bool {
 pub fn canonical_resource(value: &str) -> Result<String, crate::OAuthError> {
     let u = Url::parse(value)
         .map_err(|_| crate::OAuthError::InvalidRequest("invalid resource".into()))?;
-    if u.scheme() != "https" || u.fragment().is_some() || u.query().is_some() || u.path() != "/mcp"
+    if u.scheme() != "https"
+        || u.fragment().is_some()
+        || u.query().is_some()
+        || !u.username().is_empty()
+        || u.password().is_some()
+        || u.host_str().is_none()
+        || u.path() != "/mcp"
     {
         return Err(crate::OAuthError::InvalidRequest(
             "resource must be an HTTPS /mcp URL".into(),

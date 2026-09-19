@@ -1,4 +1,5 @@
-use oauth::{OAuthStateStore, PersistedState};
+use oauth::{OAuthProvider, OAuthStateStore, PersistedState, RegistrationRequest};
+use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn corrupt_state_recovers_cleanly_and_persistence_is_private() {
@@ -13,4 +14,21 @@ fn corrupt_state_recovers_cleanly_and_persistence_is_private() {
     let mode = std::fs::metadata(path).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o600);
 }
-use std::os::unix::fs::PermissionsExt;
+
+#[test]
+fn persisted_json_contains_only_digests_not_issued_secrets_or_codes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("oauth.json");
+    let provider =
+        OAuthProvider::with_store("https://server.test".into(), "/mcp".into(), path.clone())
+            .unwrap();
+    let registration = provider
+        .register(RegistrationRequest {
+            redirect_uris: vec!["https://client.test/cb".into()],
+            client_name: None,
+        })
+        .unwrap();
+    let json = std::fs::read_to_string(path).unwrap();
+    assert!(!json.contains(&registration.client_secret));
+    assert!(json.contains("client_secret_hash"));
+}

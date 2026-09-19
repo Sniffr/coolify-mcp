@@ -17,4 +17,12 @@ fn pkce_s256_is_strict_and_redirects_are_exact() {
         "http://localhost:123/cb",
         "http://localhost:456/cb"
     ));
+    assert!(!redirect_uri_matches(
+        "https://localhost:123/cb",
+        "https://localhost:456/cb"
+    ));
+    assert!(!redirect_uri_matches(
+        "https://client.test/cb?x=1",
+        "https://client.test/cb?x=1"
+    ));
 }

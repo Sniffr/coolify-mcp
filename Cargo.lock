@@ -749,6 +749,17 @@ dependencies = [
 [[package]]
 name = "oauth"
 version = "0.1.0"
+dependencies = [
+ "base64",
+ "getrandom 0.3.4",
+ "rand 0.9.5",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "url",
+]
 
 [[package]]
 name = "once_cell"

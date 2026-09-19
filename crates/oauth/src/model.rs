@@ -4,7 +4,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Client {
     pub client_id: String,
-    pub client_secret: String,
+    pub client_secret_hash: String,
     pub redirect_uris: Vec<String>,
     pub client_name: Option<String>,
 }
@@ -64,7 +64,7 @@ pub struct PersistedState {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizationCode {
-    pub hash: String,
+    pub code_hash: String,
     pub client_id: String,
     pub redirect_uri: String,
     pub resource: String,
@@ -75,7 +75,7 @@ pub struct AuthorizationCode {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenRecord {
-    pub hash: String,
+    pub token_hash: String,
     pub grant_id: String,
     pub client_id: String,
     pub resource: String,

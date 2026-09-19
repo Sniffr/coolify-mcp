@@ -22,7 +22,6 @@ fn rejects_oauth_attack_inputs() {
         "http://127.0.0.1:9876/other"
     ));
     assert!(!oauth::verify_pkce("weak", "not-a-valid-challenge"));
-
     let provider = OAuthProvider::new("https://server.test".into(), "/mcp".into());
     let client = provider
         .register(RegistrationRequest {
@@ -44,83 +43,151 @@ fn rejects_oauth_attack_inputs() {
         })
         .unwrap_err();
     assert!(matches!(err, OAuthError::InvalidRequest(_)));
-    let _ = TokenRequest {
-        grant_type: "authorization_code".into(),
-        code: "x".into(),
-        redirect_uri: None,
-        client_id: client.client_id.clone(),
-        client_secret: Some("wrong".into()),
-        code_verifier: Some("x".into()),
-        refresh_token: None,
-        resource: Some("https://server.test/mcp".into()),
-    };
 }
-
 #[test]
-fn exact_resource_and_code_single_use_and_refresh_replay_revokes_family() {
-    let provider = OAuthProvider::new("https://server.test".into(), "/mcp".into());
-    let c = provider
+fn signed_state_rejects_tampering_and_replay() {
+    let p = OAuthProvider::new("https://server.test".into(), "/mcp".into());
+    let c = p
         .register(RegistrationRequest {
             redirect_uris: vec!["https://client.test/cb".into()],
             client_name: None,
         })
         .unwrap();
-    let verifier = "a-secret-verifier-that-is-long-enough-123456789";
-    let challenge =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(verifier));
-    let a = provider
+    let state = p
+        .create_state(&c.client_id, "https://client.test/cb")
+        .unwrap();
+    let mut bad = state.clone();
+    bad.push('x');
+    let v = "a-secret-verifier-that-is-long-enough-123456789";
+    let ch = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(v));
+    let req = |s| AuthorizeRequest {
+        client_id: c.client_id.clone(),
+        redirect_uri: "https://client.test/cb".into(),
+        response_type: "code".into(),
+        resource: "https://server.test/mcp".into(),
+        scope: "mcp".into(),
+        state: s,
+        code_challenge: ch.clone(),
+        code_challenge_method: "S256".into(),
+    };
+    assert!(p.authorize(req(bad)).is_err());
+    assert!(p.authorize(req(state.clone())).is_ok());
+    assert!(p.authorize(req(state)).is_err());
+}
+#[test]
+fn exact_resource_and_code_single_use_and_refresh_replay_revokes_family() {
+    let p = OAuthProvider::new("https://server.test".into(), "/mcp".into());
+    let c = p
+        .register(RegistrationRequest {
+            redirect_uris: vec!["https://client.test/cb".into()],
+            client_name: None,
+        })
+        .unwrap();
+    let v = "a-secret-verifier-that-is-long-enough-123456789";
+    let ch = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(v));
+    let a = p
         .authorize(AuthorizeRequest {
             client_id: c.client_id.clone(),
             redirect_uri: "https://client.test/cb".into(),
             response_type: "code".into(),
             resource: "https://server.test/mcp".into(),
             scope: "mcp".into(),
-            state: "state".into(),
-            code_challenge: challenge,
+            state: p
+                .create_state(&c.client_id, "https://client.test/cb")
+                .unwrap(),
+            code_challenge: ch,
             code_challenge_method: "S256".into(),
         })
         .unwrap();
-    let t = provider
+    let t = p
         .exchange_code(TokenRequest {
             grant_type: "authorization_code".into(),
-            code: a.code,
+            code: a.code.clone(),
             redirect_uri: Some("https://client.test/cb".into()),
             client_id: c.client_id.clone(),
-            client_secret: Some(c.client_secret),
-            code_verifier: Some(verifier.into()),
+            client_secret: Some(c.client_secret.clone()),
+            code_verifier: Some(v.into()),
             refresh_token: None,
             resource: Some("https://server.test/mcp".into()),
         })
         .unwrap();
     assert!(
-        provider
-            .verify_bearer(&t.access_token, "https://server.test/mcp")
+        p.verify_bearer(&t.access_token, "https://server.test/mcp")
             .is_ok()
     );
     assert!(
-        provider
-            .verify_bearer(&t.access_token, "https://evil.test/mcp")
+        p.verify_bearer(&t.access_token, "https://evil.test/mcp")
             .is_err()
     );
     assert!(
-        provider
-            .exchange_code(TokenRequest {
-                grant_type: "authorization_code".into(),
-                code: "already-used".into(),
-                redirect_uri: None,
-                client_id: c.client_id,
-                client_secret: None,
-                code_verifier: None,
-                refresh_token: None,
-                resource: None
-            })
+        p.exchange_code(TokenRequest {
+            grant_type: "authorization_code".into(),
+            code: a.code,
+            redirect_uri: Some("https://client.test/cb".into()),
+            client_id: c.client_id,
+            client_secret: Some(c.client_secret),
+            code_verifier: Some(v.into()),
+            refresh_token: None,
+            resource: Some("https://server.test/mcp".into())
+        })
+        .is_err()
+    );
+    let r = p.refresh(&t.refresh_token).unwrap();
+    assert!(p.refresh(&t.refresh_token).is_err());
+    assert!(
+        p.verify_bearer(&r.access_token, "https://server.test/mcp")
             .is_err()
     );
-    let rotated = provider.refresh(&t.refresh_token).unwrap();
-    assert!(provider.refresh(&t.refresh_token).is_err());
+}
+#[test]
+fn expired_authorization_code_is_rejected() {
+    use oauth::{AuthorizationCode, Client, OAuthStateStore, PersistedState};
+    use std::collections::HashMap;
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("oauth.json");
+    let id = "client-id";
+    let secret = "client-secret";
+    let code = "expired-code";
+    let h =
+        |v: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(v));
+    let s = PersistedState {
+        clients: HashMap::from([(
+            h(id),
+            Client {
+                client_id: id.into(),
+                client_secret_hash: h(secret),
+                redirect_uris: vec!["https://client.test/cb".into()],
+                client_name: None,
+            },
+        )]),
+        codes: HashMap::from([(
+            h(code),
+            AuthorizationCode {
+                code_hash: h(code),
+                client_id: id.into(),
+                redirect_uri: "https://client.test/cb".into(),
+                resource: "https://server.test/mcp".into(),
+                scope: "mcp".into(),
+                challenge: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+                expires_at: 0,
+                used: false,
+            },
+        )]),
+        ..PersistedState::default()
+    };
+    OAuthStateStore::new(path.clone()).save(&s).unwrap();
+    let p = OAuthProvider::with_store("https://server.test".into(), "/mcp".into(), path).unwrap();
     assert!(
-        provider
-            .verify_bearer(&rotated.access_token, "https://server.test/mcp")
-            .is_err()
+        p.exchange_code(TokenRequest {
+            grant_type: "authorization_code".into(),
+            code: code.into(),
+            redirect_uri: Some("https://client.test/cb".into()),
+            client_id: id.into(),
+            client_secret: Some(secret.into()),
+            code_verifier: Some("a-secret-verifier-that-is-long-enough-123456789".into()),
+            refresh_token: None,
+            resource: Some("https://server.test/mcp".into())
+        })
+        .is_err()
     );
 }
