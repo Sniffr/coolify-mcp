@@ -12,6 +12,15 @@ const TOKEN: &str = "fixture-coolify-token-not-a-credential";
 
 fn store_path() -> (tempfile::TempDir, std::path::PathBuf) {
     let directory = tempdir().expect("temporary directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(directory.path())
+            .expect("temporary directory metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(directory.path(), permissions).expect("directory permissions");
+    }
     let path = directory.path().join("tenant.sqlite");
     (directory, path)
 }
@@ -105,6 +114,22 @@ fn same_key_survives_restart_and_wrong_key_fails_closed() {
         .load_connection(user.id)
         .expect_err("wrong key refuses decryption");
     assert!(matches!(error, TenantError::Decryption));
+}
+
+#[cfg(unix)]
+#[test]
+fn database_parent_directory_must_be_private() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempdir().expect("temporary directory");
+    let mut permissions = fs::metadata(directory.path())
+        .expect("temporary directory metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(directory.path(), permissions).expect("directory permissions");
+
+    let result = TenantStore::open(&directory.path().join("tenant.sqlite"), KEY);
+    assert!(matches!(result, Err(TenantError::Storage)));
 }
 
 #[test]

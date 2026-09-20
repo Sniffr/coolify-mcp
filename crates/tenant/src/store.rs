@@ -307,6 +307,23 @@ impl TenantStore {
 }
 
 fn ensure_private_database_file(path: &Path) -> Result<(), TenantError> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        let metadata = fs::metadata(parent).map_err(|_| TenantError::Storage)?;
+        if !metadata.is_dir() {
+            return Err(TenantError::Storage);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if metadata.permissions().mode() & 0o777 != 0o700 {
+                return Err(TenantError::Storage);
+            }
+        }
+    }
+
     let mut options = OpenOptions::new();
     options.create(true).read(true).write(true);
     #[cfg(unix)]
