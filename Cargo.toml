@@ -12,6 +12,7 @@ members = [
     "crates/mcp-tools",
     "crates/doctor",
     "crates/tenant",
+    "crates/identity",
 ]
 
 [dependencies]
@@ -33,6 +34,10 @@ url = "2"
 [[bin]]
 name = "fake-coolify"
 path = "tests/fake-coolify/server.rs"
+
+[[bin]]
+name = "fake-github"
+path = "tests/fake-github/server.rs"
 
 [[bin]]
 name = "stdio-interop"

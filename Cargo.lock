@@ -753,6 +753,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "identity"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "idna"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1854,6 +1867,7 @@ dependencies = [
  "axum",
  "http",
  "hyper-util",
+ "identity",
  "mcp-tools",
  "oauth",
  "safety",

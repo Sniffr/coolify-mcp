@@ -21,6 +21,7 @@ uuid = { version = "1", features = ["v4"] }
 mcp-tools = { path = "../mcp-tools" }
 oauth = { path = "../oauth" }
 safety = { path = "../safety" }
+identity = { path = "../identity" }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
