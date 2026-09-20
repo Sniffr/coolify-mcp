@@ -465,6 +465,47 @@ async fn call_mcp(
 }
 
 #[tokio::test]
+async fn tools_list_reports_missing_tenant_connection_instead_of_empty_roster() {
+    let directory = private_tempdir();
+    let tenants = Arc::new(
+        TenantStore::open(
+            &directory.path().join("tenant.sqlite"),
+            "fixture-encryption-key-material-that-is-long-enough",
+        )
+        .unwrap(),
+    );
+    let user = tenants.upsert_user("3001", "missing-connection").unwrap();
+    let oauth = Arc::new(OAuthProvider::new(
+        "https://example.test".into(),
+        "/mcp".into(),
+    ));
+    let client = oauth
+        .register(RegistrationRequest {
+            redirect_uris: vec!["https://client.test/callback".into()],
+            client_name: Some("fixture-client".into()),
+        })
+        .unwrap();
+    let token = issue_user_token(&oauth, &client, user.id, "missing");
+    let mut config = HttpConfig::for_tests();
+    config.oauth = oauth;
+    config.hosted_auth = Some(Arc::new(HostedAuth {
+        tenant: tenants,
+        github: Arc::new(identity::GitHubIdentityProvider::new(
+            "fixture-client".into(),
+            secrecy::SecretString::from("fixture-client-secret"),
+            Url::parse("https://example.test/auth/github/callback").unwrap(),
+            Client::new(),
+        )),
+    }));
+
+    let response = list_tools(&router_with_app(config, TenantDispatchApp), &token).await;
+    assert!(response["result"]["tools"].is_null());
+    assert_eq!(response["result"]["isError"], true);
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("tenant connection unavailable"));
+}
+
+#[tokio::test]
 async fn user_a_calls_fixture_a_and_user_b_calls_fixture_b() {
     let (fixture, base_url, fixture_task) = start_fixture().await;
     let directory = private_tempdir();

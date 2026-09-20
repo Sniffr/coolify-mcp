@@ -1,4 +1,4 @@
-use doctor::{DoctorCheckStatus, DoctorReport, ProbeResponse, run_doctor};
+use doctor::{DoctorCheckStatus, DoctorReport, ProbeResponse, run_doctor, run_hosted_doctor};
 use std::collections::HashMap;
 
 fn response(status: u16, content_type: &str, body: &str) -> ProbeResponse {
@@ -9,6 +9,29 @@ fn response(status: u16, content_type: &str, body: &str) -> ProbeResponse {
         redirected: false,
         location: None,
     }
+}
+
+#[test]
+fn hosted_doctor_does_not_require_global_coolify_credentials() {
+    let env = HashMap::from([
+        ("MCP_PUBLIC_URL".into(), "https://mcp.example".into()),
+        ("MCP_CONNECTION_ENCRYPTION_KEY".into(), "test-key".into()),
+        ("GITHUB_CLIENT_ID".into(), "client-id".into()),
+        ("GITHUB_CLIENT_SECRET".into(), "client-secret".into()),
+        (
+            "GITHUB_CALLBACK_URL".into(),
+            "https://mcp.example/auth/github/callback".into(),
+        ),
+    ]);
+    let report = run_hosted_doctor(&env, true);
+    assert!(report.ok);
+    assert!(
+        !report
+            .checks
+            .iter()
+            .any(|check| check.name == "coolify_url")
+    );
+    assert!(!report.to_json().unwrap().contains("client-secret"));
 }
 
 fn redirect(status: u16, location: &str, body: &str) -> ProbeResponse {

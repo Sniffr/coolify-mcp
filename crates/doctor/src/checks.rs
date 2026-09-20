@@ -91,6 +91,74 @@ pub(crate) fn effective_profile(env: &HashMap<String, String>) -> &'static str {
     }
 }
 
+pub(crate) fn hosted_checks(env: &HashMap<String, String>, tenant_ready: bool) -> Vec<DoctorCheck> {
+    let mut checks = Vec::new();
+    let public_url = env.get("MCP_PUBLIC_URL").map(String::as_str);
+    checks.push(match public_url.and_then(|value| Url::parse(value).ok()) {
+        Some(url) if url.scheme() == "https" && url.host_str().is_some() => DoctorCheck::pass(
+            "hosted_public_url",
+            "Hosted public URL is configured",
+            "No action required.",
+        ),
+        _ => DoctorCheck::fail(
+            "hosted_public_url",
+            "Hosted public URL is missing or invalid",
+            "Set MCP_PUBLIC_URL to the hosted service HTTPS URL.",
+        ),
+    });
+    for (name, variable, fix) in [
+        (
+            "hosted_encryption_key",
+            "MCP_CONNECTION_ENCRYPTION_KEY",
+            "Set MCP_CONNECTION_ENCRYPTION_KEY for tenant connection encryption.",
+        ),
+        (
+            "hosted_github_client",
+            "GITHUB_CLIENT_ID",
+            "Set the hosted GitHub OAuth client ID.",
+        ),
+        (
+            "hosted_github_secret",
+            "GITHUB_CLIENT_SECRET",
+            "Set the hosted GitHub OAuth client secret.",
+        ),
+        (
+            "hosted_github_callback",
+            "GITHUB_CALLBACK_URL",
+            "Set GITHUB_CALLBACK_URL to the hosted GitHub callback URL.",
+        ),
+    ] {
+        checks.push(
+            if env
+                .get(variable)
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                DoctorCheck::pass(
+                    name,
+                    "Hosted identity or tenant setting is configured",
+                    "No action required.",
+                )
+            } else {
+                DoctorCheck::fail(name, "Hosted identity or tenant setting is missing", fix)
+            },
+        );
+    }
+    checks.push(if tenant_ready {
+        DoctorCheck::pass(
+            "tenant_persistence",
+            "Tenant persistence is available",
+            "No action required.",
+        )
+    } else {
+        DoctorCheck::fail(
+            "tenant_persistence",
+            "Tenant persistence is unavailable",
+            "Check MCP_DATABASE_PATH and MCP_CONNECTION_ENCRYPTION_KEY.",
+        )
+    });
+    checks
+}
+
 pub(crate) fn static_checks(env: &HashMap<String, String>) -> Vec<DoctorCheck> {
     let mut checks = Vec::new();
     let url = env

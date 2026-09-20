@@ -194,8 +194,27 @@ async fn main() {
     let http = transport.eq_ignore_ascii_case("http");
 
     // Hosted mode is a tenant service, not a process-scoped Coolify client.
-    // Keep the old configuration path only for stdio (and its doctor command).
-    if http && !doctor_mode {
+    // Its doctor checks hosted identity and tenant persistence directly.
+    if http && doctor_mode {
+        let tenant_ready = env
+            .get("MCP_CONNECTION_ENCRYPTION_KEY")
+            .filter(|value| !value.trim().is_empty())
+            .is_some_and(|key| {
+                let path = std::path::PathBuf::from(
+                    env.get("MCP_DATABASE_PATH")
+                        .cloned()
+                        .unwrap_or_else(|| "/data/tenant.sqlite".into()),
+                );
+                tenant::TenantStore::open(&path, key).is_ok()
+            });
+        let report = doctor::run_hosted_doctor(&env, tenant_ready);
+        print_doctor_report(&report, json_report);
+        if !report.ok {
+            std::process::exit(1);
+        }
+        return;
+    }
+    if http {
         if let Err(error) = run_hosted_http(&env).await {
             eprintln!("configuration error: {error}");
             std::process::exit(2);

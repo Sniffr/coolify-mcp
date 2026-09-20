@@ -926,16 +926,32 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
             json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"coolify-mcp","version":env!("CARGO_PKG_VERSION")}}})
         }
         "tools/list" => {
-            let tools = if s.config.hosted_auth.is_some() {
-                client
-                    .as_deref()
-                    .and_then(|principal| tenant_tool_context(&s, principal).ok())
-                    .map(|context| s.app.tools_for_user(context.request))
-                    .unwrap_or_default()
+            if s.config.hosted_auth.is_some() {
+                match client.as_deref() {
+                    Some(principal) => match tenant_tool_context(&s, principal) {
+                        Ok(context) => json!({
+                            "jsonrpc":"2.0",
+                            "id":id,
+                            "result":{"tools":s.app.tools_for_user(context.request)}
+                        }),
+                        Err(error) => json!({
+                            "jsonrpc":"2.0",
+                            "id":id,
+                            "result":{"content":[{"type":"text","text":error.text}],"isError":true}
+                        }),
+                    },
+                    None => {
+                        let error = tenant_error("tenant authentication required");
+                        json!({
+                            "jsonrpc":"2.0",
+                            "id":id,
+                            "result":{"content":[{"type":"text","text":error.text}],"isError":true}
+                        })
+                    }
+                }
             } else {
-                s.app.tools()
-            };
-            json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools}})
+                json!({"jsonrpc":"2.0","id":id,"result":{"tools":s.app.tools()}})
+            }
         }
         "tools/call" => {
             let name = request
