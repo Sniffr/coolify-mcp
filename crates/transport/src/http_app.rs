@@ -583,7 +583,7 @@ async fn settings_get(State(s): State<AppState>, headers: HeaderMap) -> Response
         .is_some_and(|v| v.contains("application/json"))
     {
         return settings_json(
-            json!({"host":host,"configured":!host.is_empty(),"profile":profile.map(profile_name).unwrap_or("read-only"),"last_validated_at":Value::Null}),
+            json!({"host":host,"configured":!host.is_empty(),"profile":profile.map(profile_name).unwrap_or("read-only"),"last_validated_at":Value::Null,"setup_url":format!("{}/settings", crate::http::public_base(&s.config.public_url))}),
         );
     }
     Html(settings_html(Some(host), profile, &csrf)).into_response()
@@ -1206,7 +1206,8 @@ fn authorized(headers: &HeaderMap, s: &AppState) -> Result<String, StatusCode> {
         .verify_bearer(value, &crate::http::mcp_resource_url(&s.config.public_url))
         .map_err(|_| StatusCode::UNAUTHORIZED)
 }
-fn tenant_error(message: &'static str) -> ToolResult {
+fn tenant_error(message: impl Into<String>) -> ToolResult {
+    let message = message.into();
     ToolResult {
         text: serde_json::to_string(&json!({
             "error": {"code": "MCP_TOOL_ERROR", "message": message, "details": null},
@@ -1217,28 +1218,49 @@ fn tenant_error(message: &'static str) -> ToolResult {
     }
 }
 
+fn setup_url(s: &AppState) -> String {
+    format!(
+        "{}/settings",
+        crate::http::public_base(&s.config.public_url)
+    )
+}
+
+fn tenant_auth_required(s: &AppState) -> ToolResult {
+    tenant_error(format!(
+        "GitHub login required. Complete MCP OAuth login, then open {} in the same browser session to add your Coolify connection.",
+        setup_url(s)
+    ))
+}
+
+fn tenant_setup_required(s: &AppState) -> ToolResult {
+    tenant_error(format!(
+        "No Coolify connection saved for your GitHub user. Open {} in the same browser session you used for GitHub login and save Base URL (public https, no /api/v1 suffix) plus API token, then retry in Claude. Your token stays encrypted per-user and is never shared.",
+        setup_url(s)
+    ))
+}
+
 /// Resolve a hosted bearer principal into one request-scoped Coolify client.
-/// This is deliberately the only HTTP-to-tool construction path: failures are
-/// generic and there is no process-global client to fall back to.
+/// This is deliberately the only HTTP-to-tool construction path. Failures
+/// direct the caller to GitHub login or the per-user settings page; there is
+/// no process-global client to fall back to.
 fn tenant_tool_context(s: &AppState, principal: &str) -> Result<TenantToolContext, ToolResult> {
-    let user_id =
-        UserId::parse(principal).ok_or_else(|| tenant_error("tenant authentication required"))?;
+    let user_id = UserId::parse(principal).ok_or_else(|| tenant_auth_required(s))?;
     let hosted = s
         .config
         .hosted_auth
         .as_ref()
-        .ok_or_else(|| tenant_error("tenant connection unavailable"))?;
+        .ok_or_else(|| tenant_setup_required(s))?;
     let connection = hosted
         .tenant
         .load_connection(user_id)
-        .map_err(|_| tenant_error("tenant connection unavailable"))?
-        .ok_or_else(|| tenant_error("tenant connection unavailable"))?;
+        .map_err(|_| tenant_setup_required(s))?
+        .ok_or_else(|| tenant_setup_required(s))?;
     let token = connection.token.expose_secret().to_owned();
     let token_source = coolify_api::TokenSource::from_env(&HashMap::from([(
         "COOLIFY_ACCESS_TOKEN".to_owned(),
         token,
     )]))
-    .map_err(|_| tenant_error("tenant connection unavailable"))?;
+    .map_err(|_| tenant_setup_required(s))?;
     let client = coolify_api::CoolifyClient::new_hosted_with_local_escape(
         coolify_api::CoolifyConfig {
             base_url: connection.base_url,
@@ -1248,7 +1270,7 @@ fn tenant_tool_context(s: &AppState, principal: &str) -> Result<TenantToolContex
         },
         s.config.allow_insecure_local_targets,
     )
-    .map_err(|_| tenant_error("tenant connection unavailable"))?;
+    .map_err(|_| tenant_setup_required(s))?;
     Ok(TenantToolContext {
         request: TenantRequestContext {
             user_id,
@@ -1460,7 +1482,7 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
                         }),
                     },
                     None => {
-                        let error = tenant_error("tenant authentication required");
+                        let error = tenant_auth_required(&s);
                         json!({
                             "jsonrpc":"2.0",
                             "id":id,
@@ -1487,7 +1509,7 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
                         Ok(context) => s.app.call_for_user(context, name, args).await,
                         Err(error) => error,
                     },
-                    None => tenant_error("tenant authentication required"),
+                    None => tenant_auth_required(&s),
                 }
             } else {
                 s.app.call(name, args).await
