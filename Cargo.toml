@@ -26,6 +26,9 @@ oauth = { path = "crates/oauth" }
 transport = { path = "crates/transport" }
 mcp-tools = { path = "crates/mcp-tools" }
 doctor = { path = "crates/doctor" }
+tenant = { path = "crates/tenant" }
+identity = { path = "crates/identity" }
+secrecy = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 base64 = "0.22"
 sha2 = "0.10"

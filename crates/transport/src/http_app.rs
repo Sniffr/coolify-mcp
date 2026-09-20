@@ -80,7 +80,7 @@ struct AppState {
     app: Arc<dyn McpApplication>,
     config: HttpConfig,
     rate: RateLimiter,
-    sessions: Arc<Mutex<HashMap<String, Instant>>>,
+    sessions: Arc<Mutex<HashMap<String, (String, Instant)>>>,
     browser: Arc<Mutex<BrowserState>>,
     audit: Option<Arc<Mutex<AuditLogger<File>>>>,
 }
@@ -256,6 +256,9 @@ async fn register(
     peer: ConnectInfo<SocketAddr>,
     Json(req): Json<RegistrationRequest>,
 ) -> Response {
+    if !persistence_ready(&s) {
+        return persistence_unavailable();
+    }
     if !limited(&s, &headers, Some(peer.0), "register") {
         return rate_error();
     }
@@ -278,6 +281,9 @@ async fn oauth_state(
     peer: ConnectInfo<SocketAddr>,
     Json(req): Json<OAuthStateRequest>,
 ) -> Response {
+    if !persistence_ready(&s) {
+        return persistence_unavailable();
+    }
     if !limited(&s, &headers, Some(peer.0), "authorize") {
         return rate_error();
     }
@@ -310,6 +316,9 @@ async fn github_start(
     peer: ConnectInfo<SocketAddr>,
     Query(query): Query<GithubStartQuery>,
 ) -> Response {
+    if !persistence_ready(&s) {
+        return persistence_unavailable();
+    }
     if !limited(&s, &headers, Some(peer.0), "github_start") {
         return rate_error();
     }
@@ -343,6 +352,9 @@ async fn github_callback(
     peer: ConnectInfo<SocketAddr>,
     Query(query): Query<GithubCallbackQuery>,
 ) -> Response {
+    if !persistence_ready(&s) {
+        return persistence_unavailable();
+    }
     if !limited(&s, &headers, Some(peer.0), "github_callback") {
         return rate_error();
     }
@@ -490,6 +502,9 @@ async fn authorize(
     peer: ConnectInfo<SocketAddr>,
     Query(q): Query<AuthorizeQuery>,
 ) -> Response {
+    if !persistence_ready(&s) {
+        return persistence_unavailable();
+    }
     if !limited(&s, &headers, Some(peer.0), "authorize") {
         return rate_error();
     }
@@ -578,6 +593,9 @@ async fn token(
     peer: ConnectInfo<SocketAddr>,
     axum::extract::Form(f): axum::extract::Form<TokenForm>,
 ) -> Response {
+    if !persistence_ready(&s) {
+        return persistence_unavailable();
+    }
     if !limited(&s, &headers, Some(peer.0), "token") {
         return rate_error();
     }
@@ -615,8 +633,25 @@ fn rate_error() -> Response {
     )
         .into_response()
 }
+fn persistence_ready(s: &AppState) -> bool {
+    if s.config.hosted_auth.is_some() {
+        s.config.persistence_available
+            && s.config
+                .persistence_health
+                .load(std::sync::atomic::Ordering::Acquire)
+    } else {
+        true
+    }
+}
+fn persistence_unavailable() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({"error":"temporarily_unavailable","error_description":"authorization persistence unavailable"})),
+    )
+        .into_response()
+}
 fn mark_persistence_error(s: &AppState, error: &OAuthError) {
-    if matches!(error, OAuthError::Persistence(_)) {
+    if matches!(error, OAuthError::Persistence) {
         s.config
             .persistence_health
             .store(false, std::sync::atomic::Ordering::Release);
@@ -681,15 +716,17 @@ fn cleanup_sessions(s: &AppState) {
     s.sessions
         .lock()
         .unwrap()
-        .retain(|_, seen| now.duration_since(*seen) < s.config.session_ttl);
+        .retain(|_, (_, seen)| now.duration_since(*seen) < s.config.session_ttl);
 }
-fn session_valid(s: &AppState, id: &str) -> bool {
+fn session_valid(s: &AppState, id: &str, principal: &str) -> bool {
     if uuid::Uuid::parse_str(id).is_err() {
         return false;
     }
     cleanup_sessions(s);
     let mut sessions = s.sessions.lock().unwrap();
-    if let Some(seen) = sessions.get_mut(id) {
+    if let Some((owner, seen)) = sessions.get_mut(id)
+        && owner == principal
+    {
         *seen = Instant::now();
         true
     } else {
@@ -697,26 +734,32 @@ fn session_valid(s: &AppState, id: &str) -> bool {
     }
 }
 async fn mcp_delete(State(s): State<AppState>, headers: HeaderMap) -> Response {
-    if authorized(&headers, &s).is_err() {
+    let Ok(principal) = authorized(&headers, &s) else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
+    };
     let Some(id) = headers.get("mcp-session-id").and_then(|v| v.to_str().ok()) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    if s.sessions.lock().unwrap().remove(id).is_some() {
+    let owned = s
+        .sessions
+        .lock()
+        .unwrap()
+        .get(id)
+        .is_some_and(|(owner, _)| owner == &principal);
+    if owned && s.sessions.lock().unwrap().remove(id).is_some() {
         StatusCode::NO_CONTENT.into_response()
     } else {
         StatusCode::NOT_FOUND.into_response()
     }
 }
 async fn mcp_get(State(s): State<AppState>, headers: HeaderMap) -> Response {
-    if authorized(&headers, &s).is_err() {
+    let Ok(principal) = authorized(&headers, &s) else {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error":"invalid bearer token"})),
         )
             .into_response();
-    }
+    };
     if !accepts_json(&headers) {
         return (
             StatusCode::NOT_ACCEPTABLE,
@@ -731,7 +774,7 @@ async fn mcp_get(State(s): State<AppState>, headers: HeaderMap) -> Response {
         )
             .into_response();
     };
-    if !session_valid(&s, id) {
+    if !session_valid(&s, id, &principal) {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error":"unknown MCP session"})),
@@ -815,7 +858,7 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
     if let Some(id) = &provided
-        && !session_valid(&s, id)
+        && !session_valid(&s, id, client.as_deref().unwrap_or(""))
     {
         return (
             StatusCode::NOT_FOUND,
@@ -839,7 +882,7 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let r = s.app.call(name, args).await;
+            let r = s.app.call_for_user(client.as_deref(), name, args).await;
             audit_event(
                 &s,
                 client.as_deref(),
@@ -866,7 +909,13 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
                 .into_response();
         }
         let id = uuid::Uuid::new_v4().to_string();
-        sessions.insert(id.clone(), Instant::now());
+        sessions.insert(
+            id.clone(),
+            (
+                client.as_deref().unwrap_or_default().to_owned(),
+                Instant::now(),
+            ),
+        );
         id
     };
     let mut response = Json(response).into_response();

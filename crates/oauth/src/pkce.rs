@@ -34,12 +34,10 @@ pub fn redirect_uri_matches(registered: &str, requested: &str) -> bool {
     {
         return false;
     }
-    if a.scheme() == "http" && !is_loopback(a.host_str()) {
-        return a.port() == b.port();
-    }
-    if a.scheme() == "http" && is_loopback(a.host_str()) {
-        return true;
-    }
+    // Registration and authorization must bind the complete URI, including
+    // the port. PKCE is an additional defense, not a substitute for exact
+    // redirect matching; accepting arbitrary loopback ports permits local
+    // interception of an authorization response.
     a.port() == b.port()
 }
 pub fn canonical_resource(value: &str) -> Result<String, crate::OAuthError> {
@@ -66,9 +64,6 @@ pub fn canonical_resource(value: &str) -> Result<String, crate::OAuthError> {
         .ok_or_else(|| crate::OAuthError::InvalidRequest("resource host required".into()))?;
     let port = u.port().map(|p| format!(":{p}")).unwrap_or_default();
     Ok(format!("{}://{}{}{}", u.scheme(), host, port, u.path()))
-}
-fn is_loopback(host: Option<&str>) -> bool {
-    matches!(host, Some("localhost" | "127.0.0.1" | "[::1]" | "::1"))
 }
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {

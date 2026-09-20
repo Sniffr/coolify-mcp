@@ -701,4 +701,16 @@ pub trait McpApplication: Send + Sync {
         name: &'a str,
         args: Value,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolResult> + Send + 'a>>;
+
+    /// Dispatch a request after transport authentication. Hosted applications
+    /// override this to resolve a tenant-scoped client; local applications keep
+    /// the legacy, process-scoped dispatch via the default implementation.
+    fn call_for_user<'a>(
+        &'a self,
+        _user_id: Option<&'a str>,
+        name: &'a str,
+        args: Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolResult> + Send + 'a>> {
+        self.call(name, args)
+    }
 }

@@ -13,7 +13,7 @@ fn pkce_s256_is_strict_and_redirects_are_exact() {
         "https://a.test/cb",
         "https://a.test/cb/"
     ));
-    assert!(redirect_uri_matches(
+    assert!(!redirect_uri_matches(
         "http://localhost:123/cb",
         "http://localhost:456/cb"
     ));

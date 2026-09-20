@@ -6,7 +6,7 @@ use crate::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::Rng;
 use sha2::{Digest, Sha256};
-use std::{collections::HashSet, fs, path::PathBuf, sync::Mutex};
+use std::{fs, path::PathBuf, sync::Mutex};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -19,8 +19,8 @@ pub enum OAuthError {
     InvalidClient,
     #[error("invalid token")]
     InvalidToken,
-    #[error("persistence failure: {0}")]
-    Persistence(String),
+    #[error("persistence failure")]
+    Persistence,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StateClaims {
@@ -33,7 +33,6 @@ struct StateClaims {
 struct Inner {
     data: PersistedState,
     state_key: [u8; 32],
-    used_states: HashSet<String>,
     path: Option<PathBuf>,
 }
 pub struct OAuthProvider {
@@ -50,7 +49,6 @@ impl OAuthProvider {
             inner: Mutex::new(Inner {
                 data: PersistedState::default(),
                 state_key: random_bytes(),
-                used_states: HashSet::new(),
                 path: None,
             }),
         }
@@ -61,8 +59,7 @@ impl OAuthProvider {
         path: PathBuf,
     ) -> Result<Self, OAuthError> {
         let resource = format!("{}{}", issuer, resource_path);
-        let store =
-            OAuthStateStore::load(&path).map_err(|e| OAuthError::Persistence(e.to_string()))?;
+        let store = OAuthStateStore::load(&path).map_err(|_| OAuthError::Persistence)?;
         let state_key = load_or_create_state_key(&path)?;
         Ok(Self {
             issuer,
@@ -70,7 +67,6 @@ impl OAuthProvider {
             inner: Mutex::new(Inner {
                 data: store.state().clone(),
                 state_key,
-                used_states: HashSet::new(),
                 path: Some(path),
             }),
         })
@@ -182,14 +178,13 @@ impl OAuthProvider {
             return Err(OAuthError::InvalidRequest("redirect mismatch".into()));
         }
         let previous = i.data.clone();
-        let previous_states = i.used_states.clone();
         let claims = verify_state(&i.state_key, &req.state)
             .ok_or_else(|| OAuthError::InvalidRequest("invalid state".into()))?;
         if claims.exp < now()
             || claims.client_id != req.client_id
             || claims.redirect_uri != req.redirect_uri
             || claims.resource != self.resource
-            || !i.used_states.insert(claims.nonce)
+            || !i.data.used_states.insert(hash(&claims.nonce))
         {
             return Err(OAuthError::InvalidRequest("invalid state".into()));
         }
@@ -210,7 +205,6 @@ impl OAuthProvider {
         );
         if let Err(error) = persist(&i) {
             i.data = previous;
-            i.used_states = previous_states;
             return Err(error);
         }
         Ok(AuthorizationResponse {
@@ -366,9 +360,7 @@ impl OAuthProvider {
     }
     pub fn save_store(&self, store: &OAuthStateStore) -> Result<(), OAuthError> {
         let i = self.inner.lock().unwrap();
-        store
-            .save(&i.data)
-            .map_err(|e| OAuthError::Persistence(e.to_string()))
+        store.save(&i.data).map_err(|_| OAuthError::Persistence)
     }
     pub fn flush(&self) -> Result<(), OAuthError> {
         let i = self.inner.lock().unwrap();
@@ -427,7 +419,7 @@ fn persist(i: &Inner) -> Result<(), OAuthError> {
     if let Some(p) = &i.path {
         OAuthStateStore::new(p.clone())
             .save(&i.data)
-            .map_err(|e| OAuthError::Persistence(e.to_string()))?
+            .map_err(|_| OAuthError::Persistence)?
     }
     Ok(())
 }
@@ -475,23 +467,21 @@ fn load_or_create_state_key(path: &PathBuf) -> Result<[u8; 32], OAuthError> {
     }
     let key_path = path.with_extension("key");
     if let Ok(bytes) = fs::read(&key_path) {
-        return bytes
-            .try_into()
-            .map_err(|_| OAuthError::Persistence("invalid OAuth key file".into()));
+        return bytes.try_into().map_err(|_| OAuthError::Persistence);
     }
     let key = random_bytes();
     if let Some(parent) = key_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| OAuthError::Persistence(e.to_string()))?;
+        fs::create_dir_all(parent).map_err(|_| OAuthError::Persistence)?;
     }
     let temporary = key_path.with_extension("key.tmp");
-    fs::write(&temporary, key).map_err(|e| OAuthError::Persistence(e.to_string()))?;
+    fs::write(&temporary, key).map_err(|_| OAuthError::Persistence)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))
-            .map_err(|e| OAuthError::Persistence(e.to_string()))?;
+            .map_err(|_| OAuthError::Persistence)?;
     }
-    fs::rename(&temporary, &key_path).map_err(|e| OAuthError::Persistence(e.to_string()))?;
+    fs::rename(&temporary, &key_path).map_err(|_| OAuthError::Persistence)?;
     Ok(key)
 }
 

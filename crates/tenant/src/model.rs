@@ -14,7 +14,7 @@ impl UserId {
         Self(Uuid::new_v4())
     }
 
-    pub(crate) fn parse(value: &str) -> Option<Self> {
+    pub fn parse(value: &str) -> Option<Self> {
         Uuid::parse_str(value).ok().map(Self)
     }
 }

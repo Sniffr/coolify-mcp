@@ -62,6 +62,8 @@ pub struct PersistedState {
     pub codes: HashMap<String, AuthorizationCode>,
     pub tokens: HashMap<String, TokenRecord>,
     pub grants: HashMap<String, GrantFamily>,
+    #[serde(default)]
+    pub used_states: std::collections::HashSet<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizationCode {

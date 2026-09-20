@@ -15,7 +15,7 @@ fn rejects_oauth_attack_inputs() {
         "https://client.test/cb",
         "https://client.test/other"
     ));
-    assert!(redirect_uri_matches(
+    assert!(!redirect_uri_matches(
         "http://127.0.0.1:1234/cb",
         "http://127.0.0.1:9876/cb"
     ));
@@ -76,6 +76,42 @@ fn signed_state_rejects_tampering_and_replay() {
     assert!(p.authorize(req(state.clone())).is_ok());
     assert!(p.authorize(req(state)).is_err());
 }
+#[test]
+fn persisted_state_nonce_is_single_use_across_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("oauth-state.json");
+    let p = OAuthProvider::with_store("https://server.test".into(), "/mcp".into(), path.clone())
+        .unwrap();
+    let c = p
+        .register(RegistrationRequest {
+            redirect_uris: vec!["https://client.test/cb".into()],
+            client_name: None,
+        })
+        .unwrap();
+    let state = p
+        .create_state(&c.client_id, "https://client.test/cb")
+        .unwrap();
+    drop(p);
+
+    let restarted =
+        OAuthProvider::with_store("https://server.test".into(), "/mcp".into(), path).unwrap();
+    let v = "a-secret-verifier-that-is-long-enough-123456789";
+    let challenge =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(v));
+    let req = |state| AuthorizeRequest {
+        client_id: c.client_id.clone(),
+        redirect_uri: "https://client.test/cb".into(),
+        response_type: "code".into(),
+        resource: "https://server.test/mcp".into(),
+        scope: "mcp".into(),
+        state,
+        code_challenge: challenge.clone(),
+        code_challenge_method: "S256".into(),
+    };
+    assert!(restarted.authorize(req(state.clone())).is_ok());
+    assert!(restarted.authorize(req(state)).is_err());
+}
+
 #[test]
 fn exact_resource_and_code_single_use_and_refresh_replay_revokes_family() {
     let p = OAuthProvider::new("https://server.test".into(), "/mcp".into());
