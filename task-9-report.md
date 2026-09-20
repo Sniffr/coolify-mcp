@@ -45,3 +45,34 @@ Addressed remaining issues: added `CoolifyClient::probe_get`, a side-effect-free
 ## Fix round 3
 
 Made doctor `MCP_CAPABILITY_PROFILE` parsing case-insensitive to match the runtime exactly (`main.rs` compares case-insensitively): `OPERATIONS`/`Operations`, `ADMIN`/`Admin`, and `READ-ONLY`/`Read-Only` are now recognized, with deploy ability following the effective profile (operations/admin pass when reachable, read-only fails), while truly unknown values such as `superuser` still fail both checks. Added regression coverage for uppercase/mixed-case values. Token-file, version, unreachable, invalid-token, and `mcp.social.dpdns.org`/wildcard docs preserved; no deployment performed.
+
+## Task 9 final verification (2026-09-20)
+
+### Local gate
+
+All commands exited zero:
+
+- `cargo fmt --all -- --check` — passed.
+- `cargo test --workspace` — passed; all workspace unit, integration, and doc-test groups reported zero failures.
+- `cargo clippy --workspace --all-targets -- -D warnings` — passed with no diagnostics.
+- `./scripts/acceptance-rust.sh` — passed; output: `two-user hosted acceptance passed`. The acceptance fixture exercised separate user A/B Coolify inventories and request routing, and its assertions covered secret-free output/audit/stats.
+- `git diff --check` — passed.
+
+### Image and Compose validation
+
+- `docker build -f Dockerfile.rust -t sniffr-coolify-mcp:task9-verify .` — passed. Local image digest: `sha256:618505f681893836eeacf3d6ec3baca913ff3288259a4960cc58e8b9b35cfd78`.
+- `docker image inspect ...` — confirmed runtime user `10001:10001`, entrypoint `sniffr-coolify-mcp`, and `/healthz` healthcheck.
+- Container inspection — confirmed `/data` owner `10001:10001`, mode `700`; binary owner `root:root`, mode `755`.
+- Binary scan — no fixture token, placeholder secret, or private-key marker found in the executable strings.
+- `MCP_ENV_FILE=<temporary mode-0600 fixture file> docker compose -f deploy/multitenant-compose.yaml config --quiet` — passed. The same validation without the required external env file failed as expected (`env file /etc/coolify-mcp/multitenant.env not found`); no repository secret file was created.
+- Direct local smoke container using fixture-only GitHub values and `MCP_TRANSPORT=http` — `/healthz` returned HTTP 200; container reached `running`; no fixture secret-like value appeared in logs. No real GitHub/Coolify credentials or deployment were used.
+
+### Tracked-file secret scan
+
+Scanned 142 tracked files using location-only regex reporting for private keys, GitHub tokens, common provider tokens, AWS access keys, Coolify token assignments, and GitHub client-secret assignments. Results: private keys 0; GitHub PATs/tokens 0; OpenAI-style tokens 0; Slack tokens 0; AWS access keys 0. The 11 assignment matches were documented placeholders in `.env.example`, `deploy/multitenant.env.example`, README/HOSTING/reference docs, the plan, or fixture-only values in the acceptance script; no real secret was found and no secret value is reproduced here. The image scan likewise found no secret-like value.
+
+### Residual risks and deployment blockers
+
+- Public deployment was not performed; HTTPS, OAuth discovery/callback, Caddy routing, persistence across restart, and remote `/healthz` remain unverified.
+- Deployment requires the operator-provisioned mode-0600 env file, stable encryption key, GitHub OAuth credentials, external `brightbean-studio_default` network, persistent `/data`, and Caddy route `mcp.social.dpdns.org -> mcp:8080`. None were available or inspected remotely in this task.
+- The local direct smoke test proves the image health endpoint with fixture configuration, not end-to-end GitHub/Coolify connectivity. Deployment remains blocked until Task 10 supplies and validates those remote prerequisites without exposing secrets.
