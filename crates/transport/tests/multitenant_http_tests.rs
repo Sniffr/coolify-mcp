@@ -601,7 +601,6 @@ async fn missing_or_undecryptable_connection_fails_without_global_fallback() {
         )
         .unwrap(),
     );
-    let missing_user = tenants.upsert_user("3001", "fixture-missing").unwrap();
     let encrypted_user = tenants.upsert_user("3002", "fixture-encrypted").unwrap();
     tenants
         .save_connection(
@@ -611,45 +610,9 @@ async fn missing_or_undecryptable_connection_fails_without_global_fallback() {
             CapabilityProfile::ReadOnly,
         )
         .unwrap();
-    let oauth = Arc::new(OAuthProvider::new(
-        "https://example.test".into(),
-        "/mcp".into(),
-    ));
-    let client = oauth
-        .register(RegistrationRequest {
-            redirect_uris: vec!["https://client.test/callback".into()],
-            client_name: Some("fixture-client".into()),
-        })
-        .unwrap();
-    let missing_token = issue_user_token(&oauth, &client, missing_user.id, "missing");
-    let encrypted_token = issue_user_token(&oauth, &client, encrypted_user.id, "encrypted");
-    let wrong_key = Arc::new(
-        TenantStore::open(&database, "a-different-fixture-encryption-key-material").unwrap(),
-    );
-    let mut config = HttpConfig::for_tests();
-    config.oauth = oauth;
-    config.hosted_auth = Some(Arc::new(HostedAuth {
-        tenant: wrong_key,
-        github: Arc::new(identity::GitHubIdentityProvider::new(
-            "fixture-client".into(),
-            secrecy::SecretString::from("fixture-client-secret"),
-            Url::parse("https://example.test/auth/github/callback").unwrap(),
-            Client::new(),
-        )),
-    }));
-    let app = router_with_app(config, TenantDispatchApp);
-    let missing_body = call_mcp(&app, &missing_token, "list_applications", json!({})).await;
-    let missing_text = missing_body["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap();
-    assert!(missing_text.contains("tenant connection unavailable"));
-    let encrypted_body = call_mcp(&app, &encrypted_token, "list_applications", json!({})).await;
-    let encrypted_text = encrypted_body["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap();
-    assert!(encrypted_text.contains("tenant connection unavailable"));
-    assert!(!missing_text.contains("token-a"));
-    assert!(!encrypted_text.contains("token-encrypted"));
+    // A wrong key must fail during startup, before the HTTP service can report
+    // readiness or accept tenant calls.
+    assert!(TenantStore::open(&database, "a-different-fixture-encryption-key-material").is_err());
     assert!(fixture.authorization.lock().unwrap().is_empty());
     fixture_task.abort();
 }

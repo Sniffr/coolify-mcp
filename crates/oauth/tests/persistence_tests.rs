@@ -34,16 +34,11 @@ fn persisted_json_contains_only_digests_not_issued_secrets_or_codes() {
 }
 
 #[test]
-fn failed_automatic_persistence_rolls_back_registration() {
-    let provider = OAuthProvider::with_store(
+fn unusable_state_path_is_rejected_at_initialization() {
+    let result = OAuthProvider::with_store(
         "https://server.test".into(),
         "/mcp".into(),
         std::path::PathBuf::from("/dev/null"),
-    )
-    .unwrap();
-    let result = provider.register(RegistrationRequest {
-        redirect_uris: vec!["https://client.test/cb".into()],
-        client_name: None,
-    });
+    );
     assert!(result.is_err());
 }

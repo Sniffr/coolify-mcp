@@ -6,7 +6,11 @@ use crate::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::Rng;
 use sha2::{Digest, Sha256};
-use std::{fs, path::PathBuf, sync::Mutex};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -60,7 +64,7 @@ impl OAuthProvider {
     ) -> Result<Self, OAuthError> {
         let resource = format!("{}{}", issuer, resource_path);
         let store = OAuthStateStore::load(&path).map_err(|_| OAuthError::Persistence)?;
-        if store.degraded() && path != std::path::Path::new("/dev/null") {
+        if store.degraded() {
             return Err(OAuthError::Persistence);
         }
         let state_key = load_or_create_state_key(&path)?;
@@ -487,12 +491,7 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 fn hash(v: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(v.as_bytes()))
 }
-fn load_or_create_state_key(path: &PathBuf) -> Result<[u8; 32], OAuthError> {
-    // `/dev/null` is used by the rollback test to force state persistence failure;
-    // it intentionally has no adjacent durable key file.
-    if path == std::path::Path::new("/dev/null") {
-        return Ok(random_bytes());
-    }
+fn load_or_create_state_key(path: &Path) -> Result<[u8; 32], OAuthError> {
     let key_path = path.with_extension("key");
     if let Ok(bytes) = fs::read(&key_path) {
         return bytes.try_into().map_err(|_| OAuthError::Persistence);

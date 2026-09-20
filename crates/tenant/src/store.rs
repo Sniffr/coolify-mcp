@@ -60,6 +60,25 @@ impl TenantStore {
             )
             .map_err(|_| TenantError::Storage)?;
 
+        // A key can be syntactically valid while being wrong for an existing
+        // database. Verify every stored ciphertext before reporting readiness;
+        // otherwise health would be green until the first tenant request.
+        {
+            let mut statement = connection
+                .prepare("SELECT user_id, ciphertext FROM connections")
+                .map_err(|_| TenantError::Storage)?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                })
+                .map_err(|_| TenantError::Storage)?;
+            for row in rows {
+                let (user_id, ciphertext) = row.map_err(|_| TenantError::Storage)?;
+                let user_id = UserId::parse(&user_id).ok_or(TenantError::CorruptData)?;
+                encryption_key.decrypt(user_id, &ciphertext)?;
+            }
+        }
+
         Ok(Self {
             connection: Mutex::new(connection),
             encryption_key,

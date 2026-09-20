@@ -48,6 +48,7 @@ fn token_is_encrypted_and_never_serialized_plaintext() {
     assert!(!database_contents.contains(TOKEN));
 
     let reopened = TenantStore::open(&path, KEY).expect("store reopens");
+    assert!(TenantStore::open(&path, OTHER_KEY).is_err());
     let connection = reopened
         .load_connection(user.id)
         .expect("connection decrypts")
@@ -109,11 +110,7 @@ fn same_key_survives_restart_and_wrong_key_fails_closed() {
     );
     drop(reopened);
 
-    let wrong_key = TenantStore::open(&path, OTHER_KEY).expect("wrong key can open schema");
-    let error = wrong_key
-        .load_connection(user.id)
-        .expect_err("wrong key refuses decryption");
-    assert!(matches!(error, TenantError::Decryption));
+    assert!(TenantStore::open(&path, OTHER_KEY).is_err());
 }
 
 #[cfg(unix)]
