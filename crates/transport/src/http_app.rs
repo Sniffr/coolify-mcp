@@ -1225,42 +1225,48 @@ fn setup_url(s: &AppState) -> String {
     )
 }
 
-fn tenant_auth_required(s: &AppState) -> ToolResult {
-    tenant_error(format!(
+fn tenant_auth_message(s: &AppState) -> String {
+    format!(
         "GitHub login required. Complete MCP OAuth login, then open {} in the same browser session to add your Coolify connection.",
         setup_url(s)
-    ))
+    )
 }
 
-fn tenant_setup_required(s: &AppState) -> ToolResult {
-    tenant_error(format!(
+fn tenant_setup_message(s: &AppState) -> String {
+    format!(
         "No Coolify connection saved for your GitHub user. Open {} in the same browser session you used for GitHub login and save Base URL (public https, no /api/v1 suffix) plus API token, then retry in Claude. Your token stays encrypted per-user and is never shared.",
         setup_url(s)
-    ))
+    )
+}
+
+fn tenant_auth_required(s: &AppState) -> ToolResult {
+    tenant_error(tenant_auth_message(s))
 }
 
 /// Resolve a hosted bearer principal into one request-scoped Coolify client.
 /// This is deliberately the only HTTP-to-tool construction path. Failures
 /// direct the caller to GitHub login or the per-user settings page; there is
 /// no process-global client to fall back to.
-fn tenant_tool_context(s: &AppState, principal: &str) -> Result<TenantToolContext, ToolResult> {
-    let user_id = UserId::parse(principal).ok_or_else(|| tenant_auth_required(s))?;
+/// Returns the user-facing message so `tools/list` can surface a JSON-RPC
+/// error (spec requires `result.tools`) while `tools/call` surfaces `isError`.
+fn tenant_tool_context(s: &AppState, principal: &str) -> Result<TenantToolContext, String> {
+    let user_id = UserId::parse(principal).ok_or_else(|| tenant_auth_message(s))?;
     let hosted = s
         .config
         .hosted_auth
         .as_ref()
-        .ok_or_else(|| tenant_setup_required(s))?;
+        .ok_or_else(|| tenant_setup_message(s))?;
     let connection = hosted
         .tenant
         .load_connection(user_id)
-        .map_err(|_| tenant_setup_required(s))?
-        .ok_or_else(|| tenant_setup_required(s))?;
+        .map_err(|_| tenant_setup_message(s))?
+        .ok_or_else(|| tenant_setup_message(s))?;
     let token = connection.token.expose_secret().to_owned();
     let token_source = coolify_api::TokenSource::from_env(&HashMap::from([(
         "COOLIFY_ACCESS_TOKEN".to_owned(),
         token,
     )]))
-    .map_err(|_| tenant_setup_required(s))?;
+    .map_err(|_| tenant_setup_message(s))?;
     let client = coolify_api::CoolifyClient::new_hosted_with_local_escape(
         coolify_api::CoolifyConfig {
             base_url: connection.base_url,
@@ -1270,7 +1276,7 @@ fn tenant_tool_context(s: &AppState, principal: &str) -> Result<TenantToolContex
         },
         s.config.allow_insecure_local_targets,
     )
-    .map_err(|_| tenant_setup_required(s))?;
+    .map_err(|_| tenant_setup_message(s))?;
     Ok(TenantToolContext {
         request: TenantRequestContext {
             user_id,
@@ -1475,18 +1481,17 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
                             "id":id,
                             "result":{"tools":s.app.tools_for_user(context.request)}
                         }),
-                        Err(error) => json!({
+                        Err(message) => json!({
                             "jsonrpc":"2.0",
                             "id":id,
-                            "result":{"content":[{"type":"text","text":error.text}],"isError":true}
+                            "error":{"code":-32000,"message":message}
                         }),
                     },
                     None => {
-                        let error = tenant_auth_required(&s);
                         json!({
                             "jsonrpc":"2.0",
                             "id":id,
-                            "result":{"content":[{"type":"text","text":error.text}],"isError":true}
+                            "error":{"code":-32000,"message":tenant_auth_message(&s)}
                         })
                     }
                 }
@@ -1507,7 +1512,7 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
                 match client.as_deref() {
                     Some(principal) => match tenant_tool_context(&s, principal) {
                         Ok(context) => s.app.call_for_user(context, name, args).await,
-                        Err(error) => error,
+                        Err(message) => tenant_error(message),
                     },
                     None => tenant_auth_required(&s),
                 }

@@ -540,11 +540,10 @@ async fn tools_list_reports_missing_tenant_connection_instead_of_empty_roster() 
     }));
 
     let response = list_tools(&router_with_app(config, TenantDispatchApp), &token).await;
-    assert!(response["result"]["tools"].is_null());
-    assert_eq!(response["result"]["isError"], true);
-    let text = response["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("No Coolify connection saved"));
-    assert!(text.contains("/settings"));
+    assert!(response["result"].is_null());
+    let message = response["error"]["message"].as_str().unwrap();
+    assert!(message.contains("No Coolify connection saved"));
+    assert!(message.contains("/settings"));
 }
 
 #[tokio::test]
