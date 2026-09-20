@@ -48,7 +48,9 @@ if command -v docker >/dev/null 2>&1 && [[ -f deploy/multitenant-compose.yaml ]]
     exit 1
   fi
   published="$(docker inspect --format '{{json .NetworkSettings.Ports}}' "$container_id")"
-  if [[ -n "$published" && "$published" != "null" && "$published" != "{}" ]]; then
+  # Docker reports exposed-but-unpublished ports as {"8080/tcp":null}.
+  # Reject only entries that contain an actual host binding object.
+  if [[ "$published" =~ '"HostIp"' || "$published" =~ '"HostPort"' ]]; then
     echo "FAIL mcp: production service must not publish a host port" >&2
     exit 1
   fi
