@@ -1,3 +1,5 @@
+# Local fixture Compose only. Production uses deploy/multitenant-compose.yaml.
+# Keep these defaults for local fake Coolify/stdio and protocol testing.
 services:
   coolify-mcp:
     build:

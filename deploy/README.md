@@ -1,47 +1,51 @@
-# Hosted Rust MCP deployment
+# Hosted multi-tenant Rust MCP deployment
 
-## Target
+## Production topology
 
-- Public host: `mcp.social.dpdns.org`
-- MCP endpoint: `https://mcp.social.dpdns.org/mcp`
-- Health endpoint: `https://mcp.social.dpdns.org/healthz`
-- DNS zone: wildcard `*.social.dpdns.org`
-- Remote account: `sidney@77.90.40.213`
+- Public URL: `https://mcp.social.dpdns.org/mcp`
+- Health URL: `https://mcp.social.dpdns.org/healthz`
+- Caddy route: `mcp.social.dpdns.org` → `mcp:8080`
+- Docker network: `brightbean-studio_default`
+- Compose file: `deploy/multitenant-compose.yaml`
+- Protected env file: `/etc/coolify-mcp/multitenant.env` (mode `0600`)
 
-The deployment was **not activated by Task 11**. Read-only discovery found Docker 29.7.2, Docker Compose v5.5.0, and DNS resolution to `77.90.40.213`. Caddy is the existing proxy and owns ports 80/443, but its verified configuration only contains the `${APP_DOMAIN:localhost}` Brightbean route; the target hostname is not configured. Public HTTPS currently fails during TLS negotiation. Docker Swarm secrets/configs are unavailable because the host is not a Swarm manager, and no approved host secret injection mechanism was verified.
+The service has no published host port and has no global Coolify URL or token. GitHub identifies users; users save their own encrypted Coolify connection in Settings. `/data` is persistent and private, and the container runs as `10001:10001`.
 
-Per the deployment brief, do not make privileged or irreversible changes until both prerequisites are supplied:
+## Provision and start
 
-1. An existing host secret mechanism that can inject `COOLIFY_BASE_URL`, `COOLIFY_ACCESS_TOKEN`, and OAuth signing/persistence secrets without putting values in Git, command arguments, image layers, or a committed `.env` file.
-2. An approved Caddy/proxy configuration and certificate path for `mcp.social.dpdns.org`, forwarding `/mcp` and `/healthz` to the Rust container on port 8080.
+```sh
+sudo install -d -m 0700 /etc/coolify-mcp
+sudo install -m 0600 deploy/multitenant.env.example /etc/coolify-mcp/multitenant.env
+sudoedit /etc/coolify-mcp/multitenant.env
 
-## Intended runtime configuration
+docker build -f Dockerfile.rust -t sniffr-coolify-mcp:multitenant .
+docker compose -f deploy/multitenant-compose.yaml config --quiet
+docker compose -f deploy/multitenant-compose.yaml up -d
+./deploy/remote-check.sh
+```
 
-Use the reviewed Rust image built from the deployment commit with:
+Set `MCP_CONNECTION_ENCRYPTION_KEY`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and the exact public/callback URLs in the protected file. Never put secrets in command arguments, Compose YAML, image layers, logs, or Git. The OAuth callback is `https://mcp.social.dpdns.org/auth/github/callback`.
 
-- `MCP_TRANSPORT=http`
-- `MCP_PUBLIC_URL=https://mcp.social.dpdns.org`
-- `MCP_PORT=8080`
-- `MCP_CAPABILITY_PROFILE=read-only`
-- container user `10001:10001` (non-root)
-- persistent writable `/data` volume for OAuth state, its adjacent mode-600 signing key, and audit log
-- health check `GET /healthz`
+Configure Caddy with:
 
-Inject Coolify URL/token and OAuth key material only through the approved host secret mechanism. Never place them in `compose.yaml`, Dockerfile, image labels, shell arguments, logs, or Git.
+```caddyfile
+mcp.social.dpdns.org {
+    reverse_proxy mcp:8080
+}
+```
 
-## Activation checklist (after blockers are resolved)
+Validate Caddy and reload it only after the container is healthy. Do not expose `8080` on the host.
 
-1. Build and tag `Dockerfile.rust` from the reviewed commit without secrets.
-2. Transfer only source/build artifacts and deployment configuration.
-3. Start the container with the runtime settings above and persistent `/data`.
-4. Configure the existing proxy for the concrete hostname and verify TLS.
-5. Run `./deploy/remote-check.sh`.
-6. Complete one real OAuth PKCE MCP client session against `/mcp`; list the approved roster and make only a safe inventory/version call.
-7. Inspect service logs for credentials, environment values, and raw response bodies.
-8. Record the deployed image tag, health output, tool count, OAuth state path, and rollback command in the task report before switching traffic.
+## Client setup and operation
 
-Rollback is to stop the new container and restore the previous Rust image/proxy route, or retain the documented Python stdio fallback. Do not revoke credentials as part of rollback.
+Configure Claude or OpenCode with the URL only, `https://mcp.social.dpdns.org/mcp`. Complete GitHub browser login, open `/settings`, and enter the user's own Coolify URL/token. The default capability profile is `read-only`; writes/deploys/deletes retain confirmation safeguards. Rotate by saving a new token, and delete a connection in Settings to remove its ciphertext and revoke grants.
+
+For full OAuth app, client, lifecycle, troubleshooting, and rollback instructions, see [`../docs/hosted-multitenant-setup.md`](../docs/hosted-multitenant-setup.md).
+
+## Checks and rollback
+
+`remote-check.sh` checks the routed health endpoint and OAuth discovery without sending credentials. It rejects credential-like response content. For a failed rollout, stop the new Compose service and restore the previous image and Caddyfile backup; preserve `/data` and do not revoke credentials.
 
 ## Local fallback
 
-For local clients, keep using the Python stdio server described in `HOSTING.md`; it does not provide a public HTTP endpoint.
+Keep `compose.rust.yaml` for local fixture behavior only. Local clients can use Rust stdio or `python3 coolify_mcp_server.py` with local `COOLIFY_URL`/`COOLIFY_TOKEN` environment variables. These local credentials are never part of hosted Compose.

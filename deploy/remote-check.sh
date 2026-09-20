@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_URL="https://mcp.social.dpdns.org"
-forbidden='COOLIFY_ACCESS_TOKEN|COOLIFY_TOKEN|Authorization:[[:space:]]*Bearer|fixture-token|password|secret'
+BASE_URL="${BASE_URL:-https://mcp.social.dpdns.org}"
+EXPECTED_UPSTREAM='mcp:8080'
+forbidden='COOLIFY_ACCESS_TOKEN|COOLIFY_TOKEN|COOLIFY_BASE_URL|COOLIFY_URL|Authorization:[[:space:]]*Bearer|fixture-token|password|secret'
 
 fetch() {
   local path="$1"
@@ -36,4 +37,16 @@ if [[ "$auth_server" != *'https://mcp.social.dpdns.org'* ]]; then
   exit 1
 fi
 
-echo "remote health and OAuth discovery checks passed for $BASE_URL"
+# The routed health check proves Caddy reaches the private mcp:8080 upstream.
+# When run on the Docker host, also validate the rendered production topology
+# and assert that the mcp container has no published host port.
+if command -v docker >/dev/null 2>&1 && [[ -f deploy/multitenant-compose.yaml ]]; then
+  docker compose -f deploy/multitenant-compose.yaml config --quiet
+  published="$(docker inspect --format '{{json .NetworkSettings.Ports}}' mcp 2>/dev/null || true)"
+  if [[ -n "$published" && "$published" != "null" && "$published" != "{}" ]]; then
+    echo "FAIL mcp: production service must not publish a host port" >&2
+    exit 1
+  fi
+fi
+
+echo "remote health and OAuth discovery checks passed for $BASE_URL (Caddy upstream ${EXPECTED_UPSTREAM}; no public upstream port)"

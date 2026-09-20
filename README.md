@@ -61,9 +61,11 @@ cargo run --release
 cargo run -- doctor --json
 ```
 
-Remote mode uses Streamable HTTP at `/mcp` (the hosted service is `https://mcp.social.dpdns.org/mcp`, a concrete host under `*.social.dpdns.org`) and OAuth 2.1 with PKCE. Set `MCP_TRANSPORT=http`, `MCP_PUBLIC_URL`, `MCP_PORT` (default `8080`), and mount persistent OAuth state at `/data`. `MCP_CAPABILITY_PROFILE` is `read-only`, `operations`, or `admin`; HTTP defaults to read-only. Both `COOLIFY_BASE_URL`/`COOLIFY_ACCESS_TOKEN` and the legacy `COOLIFY_URL`/`COOLIFY_TOKEN` names are accepted (new names win). Never paste a real token into Git, chat, images, or logs.
+Remote mode uses Streamable HTTP at `/mcp` and OAuth 2.1 with PKCE. The hosted multi-tenant deployment is `https://mcp.social.dpdns.org/mcp`: GitHub authenticates each user, and each user enters their own Coolify URL/token at `/settings`. Hosted mode has no global Coolify credential; it stores each connection encrypted under private `/data`. HTTP defaults to the `read-only` capability profile. See [`docs/hosted-multitenant-setup.md`](docs/hosted-multitenant-setup.md) for the Compose, Caddy, OAuth, and client setup.
 
-The Python installer and `coolify_mcp_server.py` remain the fallback until Rust protocol and hosted acceptance checks are complete.
+For local Rust HTTP fixtures, set `MCP_TRANSPORT=http`, `MCP_PUBLIC_URL`, `MCP_PORT` (default `8080`), and mount persistent state at `/data`; the local Compose file intentionally retains its fixture credential behavior. For local stdio, `COOLIFY_BASE_URL`/`COOLIFY_ACCESS_TOKEN` and legacy `COOLIFY_URL`/`COOLIFY_TOKEN` names remain accepted. Never paste a real token into Git, chat, images, or logs.
+
+The Python installer and `coolify_mcp_server.py` remain the dependency-free local fallback; they are not a public HTTP endpoint.
 
 ## 🟣 Claude Code
 

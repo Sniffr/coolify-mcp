@@ -1,0 +1,35 @@
+services:
+  mcp:
+    image: sniffr-coolify-mcp:multitenant
+    init: true
+    user: "10001:10001"
+    restart: unless-stopped
+    env_file:
+      # Provision this owner-readable file outside the repository (mode 0600).
+      - ${MCP_ENV_FILE:-/etc/coolify-mcp/multitenant.env}
+    environment:
+      MCP_TRANSPORT: http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8080"
+      MCP_PUBLIC_URL: https://mcp.social.dpdns.org
+      MCP_DATABASE_PATH: /data/tenant.sqlite3
+      MCP_CAPABILITY_PROFILE: read-only
+    volumes:
+      - mcp-data:/data
+    networks:
+      - caddy
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --max-time 3 http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+volumes:
+  mcp-data:
+    name: coolify-mcp-data
+
+networks:
+  caddy:
+    external: true
+    name: brightbean-studio_default

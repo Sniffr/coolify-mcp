@@ -1,71 +1,51 @@
-# 🚀 Hosting Guide
+# Hosting guide
 
-## Choose your transport first
+Choose the transport first. Local stdio is simplest; hosted HTTP is for remote MCP clients and adds GitHub identity plus per-user encrypted Coolify connections.
 
-`coolify_mcp_server.py` uses **stdio MCP**. This is ideal when the MCP client launches the process locally or inside the same agent runtime. It is not an HTTP server and should not be placed directly behind a public URL.
+## Hosted multi-tenant HTTP (recommended for remote clients)
 
-For a remote setup, use an authenticated MCP gateway/bridge that supports your client’s transport. Keep the bridge private behind VPN, an identity-aware proxy, or a strict allowlist. Do not invent a public unauthenticated HTTP wrapper around `coolify_request`.
+The production endpoint is `https://mcp.social.dpdns.org/mcp`. Follow [`docs/hosted-multitenant-setup.md`](docs/hosted-multitenant-setup.md) for the complete procedure. In summary:
 
-## Option A — Local process (recommended)
+1. Create a GitHub OAuth App with callback `https://mcp.social.dpdns.org/auth/github/callback` and identity-only scopes.
+2. Put `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_CALLBACK_URL`, `MCP_PUBLIC_URL`, and a stable `MCP_CONNECTION_ENCRYPTION_KEY` in `/etc/coolify-mcp/multitenant.env` with mode `0600`.
+3. Do **not** configure `COOLIFY_BASE_URL`, `COOLIFY_ACCESS_TOKEN`, `COOLIFY_URL`, or `COOLIFY_TOKEN` in hosted Compose. Users supply their own URL/token in the authenticated Settings page.
+4. Run `deploy/multitenant-compose.yaml`. It uses UID/GID `10001`, a private persistent `/data` volume, the existing `brightbean-studio_default` Caddy network, and no published host port.
+5. Configure Caddy as `mcp.social.dpdns.org { reverse_proxy mcp:8080 }` and validate `/healthz` before client login.
+6. Configure Claude or OpenCode with the remote URL only: `https://mcp.social.dpdns.org/mcp`. Complete GitHub login in a browser, then save your Coolify connection at `/settings`.
+
+HTTP defaults to `read-only`; use `operations` or `admin` only after review. Existing confirmation checks still protect writes, deploys, and deletes. Rotate a connection by saving a replacement token in Settings. Delete it there to remove ciphertext and revoke the user's grants. Preserve `/data` and the encryption key during upgrades and rollback.
+
+## Local stdio (no public endpoint)
+
+The Python server is dependency-free and remains the fallback:
 
 ```bash
-python3 --version
 export COOLIFY_URL='https://coolify.example.com'
 export COOLIFY_TOKEN='complete-token'
 python3 coolify_mcp_server.py
 ```
 
-The MCP client launches the process. Do not run the command in a shared shell with history enabled if your shell records exported secrets; prefer your OS secret manager or client environment configuration.
-
-## Option B — Docker / Compose
+Rust stdio is also available with the same local environment aliases:
 
 ```bash
-export COOLIFY_URL='https://coolify.example.com'
-export COOLIFY_TOKEN='complete-token'
-docker compose run --rm coolify-mcp
+cargo run --release
 ```
 
-For a service manager, inject secrets through the host’s secret mechanism. Do not hard-code them in `compose.yaml`, the Dockerfile, image layers, or GitHub Actions logs.
+Use an OS secret manager or a mode-0600 environment file; never commit or paste tokens. Local stdio does not need GitHub OAuth, `/data`, a tenant database, or Caddy.
 
-## Option C — Deploy the repository on Coolify
+## Local Docker/Compose fixture
 
-1. Push this repository to a public or private GitHub repository.
-2. In Coolify, create an Application from that repository.
-3. Build using the included `Dockerfile`.
-4. Add runtime environment variables named `COOLIFY_URL` and `COOLIFY_TOKEN` in Coolify’s secret/environment settings.
-5. Do not expose a public domain unless you add a separate authenticated MCP transport gateway.
-6. Give the Coolify token the minimum permissions needed by the agent.
-7. Restrict inbound access to trusted clients and test with a read-only call.
+`compose.rust.yaml` is intentionally a local fixture and retains its localhost port, host-docker-internal Coolify URL, and fixture token defaults. Do not use it for production. The production file is `deploy/multitenant-compose.yaml`.
 
-Because stdio expects a client-managed process, a plain Coolify web deployment will not automatically create a usable remote MCP endpoint. For remote access, add a properly authenticated MCP transport adapter and document its authentication separately.
+## Troubleshooting and rollback
 
-## Option D — VM/systemd
+- `503 /healthz`: check `/data` ownership/mode, database initialization, and the protected env file without printing its values.
+- OAuth failures: callback URL, public HTTPS URL, and GitHub client pair must match exactly.
+- Settings failures: the user's Coolify host must be reachable from the container and the user's token must allow the selected read-only validation.
+- Caddy failures: both Caddy and `mcp` must be attached to `brightbean-studio_default`; use upstream `mcp:8080`, not a host port.
 
-A stdio server is normally launched per client, not kept as a public daemon. If a gateway launches it, use a dedicated Unix user, locked-down filesystem permissions, firewall rules, TLS at the gateway, authentication, and log redaction. Never log `Authorization` headers or environment values.
+Rollback by stopping the new service and restoring the previous image and Caddyfile backup. Keep `/data` and protected secrets intact; do not revoke credentials as part of rollback. See `deploy/remote-check.sh` for safe public health/discovery checks.
 
-## Coolify token setup
+## Security and token lifecycle
 
-- Cloud: create an API token for the intended team.
-- Self-hosted: enable API access under **Settings → Configuration → Advanced → API Settings**.
-- Start with `read`.
-- Add `deploy` only for deployment automation.
-- Add `write` only for resource changes.
-- Add `read:sensitive` only for required secrets/logs/configuration.
-- Avoid `root` unless there is a documented, unavoidable need.
-- Use a separate token per client/team and rotate it regularly.
-
-## Smoke tests
-
-Ask the MCP client to call `coolify_health`, then perform a safe read such as listing the current team or applications. Before any write, confirm the exact endpoint, target UUID, body, and expected effect.
-
-## Incident response
-
-If a token is ever pasted into chat, a terminal transcript, a public issue, or a Git commit: revoke it immediately in Coolify, remove it from logs/history where possible, create a replacement, and review API access logs. A token exposed in a conversation should be considered compromised.
-
-## Rust HTTP deployment
-
-The hosted name is the concrete `mcp.social.dpdns.org` under the wildcard DNS zone `*.social.dpdns.org`; configure the certificate and proxy for that concrete hostname, not the parent zone. The Rust binary supports local stdio and authenticated Streamable HTTP. For `https://mcp.social.dpdns.org`, configure `MCP_TRANSPORT=http`, `MCP_PUBLIC_URL=https://mcp.social.dpdns.org`, `MCP_PORT=8080`, and a persistent `/data` volume for OAuth state. OAuth uses authorization code + PKCE; put the Coolify URL/token in runtime secrets, using either `COOLIFY_BASE_URL`/`COOLIFY_ACCESS_TOKEN` or the compatible `COOLIFY_URL`/`COOLIFY_TOKEN` aliases. Do not paste a real token into Git or chat.
-
-Configure a health check for `/healthz`, terminate TLS at the proxy, and ensure `/mcp` is forwarded rather than rewritten by a routing catch-all. Start with `MCP_CAPABILITY_PROFILE=read-only`; explicitly audit any move to operations/admin. Deployment validation must use health, discovery, tool listing, and safe read-only inventory only—never destructive calls.
-
-Before switching production traffic, run `cargo run -- doctor --json` and workspace tests. If health checks or OAuth fail, roll back to the last Rust image or the existing Python stdio installer; do not revoke credentials as part of rollback. Keep the Python path clearly available until the Rust installer is verified.
+Use a separate least-privilege Coolify token per user/integration. Prefer read-only. Users should revoke old Coolify tokens after rotation. Never log Authorization headers, raw tool arguments/responses, GitHub secrets, cookies, or environment values.
