@@ -37,9 +37,11 @@ fn hosted_policy_rejects_private_and_metadata_destinations() {
 
 #[test]
 fn hosted_policy_allows_public_https() {
-    let url = "https://example.com".parse().unwrap();
+    // Use a public literal address so this policy unit test does not depend on
+    // external DNS availability. Production validation still resolves hostnames.
+    let url = "https://1.1.1.1".parse().unwrap();
     assert!(validate_hosted_base_url(&url).is_ok());
-    assert!(CoolifyClient::new_hosted(config("https://example.com")).is_ok());
+    assert!(CoolifyClient::new_hosted(config("https://1.1.1.1")).is_ok());
 }
 
 #[test]
