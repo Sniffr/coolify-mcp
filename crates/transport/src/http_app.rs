@@ -411,36 +411,51 @@ async fn github_callback(
     // Consume the durable records first.  Removing the in-memory copy first
     // leaves the durable row available to a concurrent callback, allowing the
     // same GitHub state to resume twice before the cleanup below runs.
-    let continuation = consume_json_session::<GithubContinuationRecord>(&s, &state, "github")
-        .map(|(value, _)| value)
-        .or_else(|| {
-            s.browser
-                .lock()
-                .unwrap()
-                .github
-                .remove(&state)
-                .map(|value| GithubContinuationRecord {
-                    mcp_state: value.mcp_state,
-                })
-        });
+    let continuation = if let Some(store) = tenant_store(&s) {
+        // A configured persistent store is authoritative. Do not fall back to
+        // the process-local copy when a database/decryption error occurs: that
+        // would make restart/persistence failures fail open and could resume a
+        // transaction with state the durable store rejected.
+        match store.consume_session(&state, "github") {
+            Ok(Some(record)) => {
+                serde_json::from_slice::<GithubContinuationRecord>(&record.payload).ok()
+            }
+            Ok(None) => None,
+            Err(_) => return persistence_unavailable(),
+        }
+    } else {
+        s.browser
+            .lock()
+            .unwrap()
+            .github
+            .remove(&state)
+            .map(|value| GithubContinuationRecord {
+                mcp_state: value.mcp_state,
+            })
+    };
     let Some(continuation) = continuation else {
         return auth_failure();
     };
     s.browser.lock().unwrap().github.remove(&state);
-    let pending =
-        consume_json_session::<PendingAuthorizationRecord>(&s, &continuation.mcp_state, "pending")
-            .map(|(value, _)| value)
-            .or_else(|| {
-                s.browser
-                    .lock()
-                    .unwrap()
-                    .pending
-                    .remove(&continuation.mcp_state)
-                    .map(|value| PendingAuthorizationRecord {
-                        request: value.request,
-                        client_state: value.client_state,
-                    })
-            });
+    let pending = if let Some(store) = tenant_store(&s) {
+        match store.consume_session(&continuation.mcp_state, "pending") {
+            Ok(Some(record)) => {
+                serde_json::from_slice::<PendingAuthorizationRecord>(&record.payload).ok()
+            }
+            Ok(None) => None,
+            Err(_) => return persistence_unavailable(),
+        }
+    } else {
+        s.browser
+            .lock()
+            .unwrap()
+            .pending
+            .remove(&continuation.mcp_state)
+            .map(|value| PendingAuthorizationRecord {
+                request: value.request,
+                client_state: value.client_state,
+            })
+    };
     let Some(pending) = pending else {
         return auth_failure();
     };
@@ -779,18 +794,6 @@ fn load_json_session<T: for<'de> Deserialize<'de>>(
         record.user_id,
     ))
 }
-fn consume_json_session<T: for<'de> Deserialize<'de>>(
-    s: &AppState,
-    id: &str,
-    kind: &str,
-) -> Option<(T, Option<UserId>)> {
-    let record = tenant_store(s)?.consume_session(id, kind).ok()??;
-    Some((
-        serde_json::from_slice(&record.payload).ok()?,
-        record.user_id,
-    ))
-}
-
 fn unix_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
