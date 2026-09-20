@@ -84,7 +84,7 @@ jobs:
 
   deploy:
     needs: build-push
-    if: github.ref == 'refs/heads/main' && inputs.skip_deploy != 'true' && secrets.SSH_HOST != '' && secrets.SSH_USER != '' && secrets.SSH_PRIVATE_KEY != ''
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_deploy != 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
