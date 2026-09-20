@@ -400,49 +400,47 @@ async fn github_callback(
         return auth_failure();
     }
     cleanup_browser(&s);
-    let continuation = s
-        .browser
-        .lock()
-        .unwrap()
-        .github
-        .remove(&state)
-        .map(|value| GithubContinuationRecord {
-            mcp_state: value.mcp_state,
-        })
+    // Consume the durable records first.  Removing the in-memory copy first
+    // leaves the durable row available to a concurrent callback, allowing the
+    // same GitHub state to resume twice before the cleanup below runs.
+    let continuation = consume_json_session::<GithubContinuationRecord>(&s, &state, "github")
+        .map(|(value, _)| value)
         .or_else(|| {
-            consume_json_session::<GithubContinuationRecord>(&s, &state, "github")
-                .map(|(value, _)| value)
+            s.browser
+                .lock()
+                .unwrap()
+                .github
+                .remove(&state)
+                .map(|value| GithubContinuationRecord {
+                    mcp_state: value.mcp_state,
+                })
         });
     let Some(continuation) = continuation else {
         return auth_failure();
     };
-    if let Some(store) = tenant_store(&s) {
-        let _ = store.delete_session(&state, "github");
-    }
-    let pending = s
-        .browser
-        .lock()
-        .unwrap()
-        .pending
-        .remove(&continuation.mcp_state)
-        .map(|value| PendingAuthorizationRecord {
-            request: value.request,
-            client_state: value.client_state,
-        })
-        .or_else(|| {
-            consume_json_session::<PendingAuthorizationRecord>(
-                &s,
-                &continuation.mcp_state,
-                "pending",
-            )
+    s.browser.lock().unwrap().github.remove(&state);
+    let pending =
+        consume_json_session::<PendingAuthorizationRecord>(&s, &continuation.mcp_state, "pending")
             .map(|(value, _)| value)
-        });
+            .or_else(|| {
+                s.browser
+                    .lock()
+                    .unwrap()
+                    .pending
+                    .remove(&continuation.mcp_state)
+                    .map(|value| PendingAuthorizationRecord {
+                        request: value.request,
+                        client_state: value.client_state,
+                    })
+            });
     let Some(pending) = pending else {
         return auth_failure();
     };
-    if let Some(store) = tenant_store(&s) {
-        let _ = store.delete_session(&continuation.mcp_state, "pending");
-    }
+    s.browser
+        .lock()
+        .unwrap()
+        .pending
+        .remove(&continuation.mcp_state);
     let github_user = match hosted.github.exchange_callback(&code).await {
         Ok(user) => user,
         Err(_) => return auth_failure(),
@@ -709,6 +707,9 @@ async fn settings_logout(State(s): State<AppState>, headers: HeaderMap, body: By
     }
     if let Some(session) = cookie(&headers, "mcp_session") {
         s.browser.lock().unwrap().sessions.remove(&session);
+        if let Some(store) = tenant_store(&s) {
+            let _ = store.delete_session(&session, "browser");
+        }
     }
     let mut response = Json(json!({"logged_out":true})).into_response();
     response
@@ -1204,20 +1205,14 @@ async fn mcp_delete(State(s): State<AppState>, headers: HeaderMap) -> Response {
     let Some(id) = headers.get("mcp-session-id").and_then(|v| v.to_str().ok()) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    let owned = s
-        .sessions
-        .lock()
-        .unwrap()
-        .get(id)
-        .is_some_and(|(owner, _)| owner == &principal);
-    if owned && s.sessions.lock().unwrap().remove(id).is_some() {
-        if let Some(store) = tenant_store(&s) {
-            let _ = store.delete_session(id, "mcp");
-        }
-        StatusCode::NO_CONTENT.into_response()
-    } else {
-        StatusCode::NOT_FOUND.into_response()
+    if !session_valid(&s, id, &principal) {
+        return StatusCode::NOT_FOUND.into_response();
     }
+    s.sessions.lock().unwrap().remove(id);
+    if let Some(store) = tenant_store(&s) {
+        let _ = store.delete_session(id, "mcp");
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 async fn mcp_get(State(s): State<AppState>, headers: HeaderMap) -> Response {
     let Ok(principal) = authorized(&headers, &s) else {
