@@ -183,7 +183,8 @@ fn authorization_url_requests_only_identity_scopes() {
         query.get("redirect_uri"),
         Some(&"https://service.example/auth/github/callback".to_owned())
     );
-    assert_eq!(query.get("scope"), Some(&"read:user user:email".to_owned()));
+    assert_eq!(query.get("scope"), Some(&"read:user".to_owned()));
+    assert!(!url.as_str().contains("user:email"));
     assert!(!url.as_str().contains("repo"));
     assert!(!url.as_str().contains("admin"));
 }

@@ -105,7 +105,7 @@ impl GitHubIdentityProvider {
         url.query_pairs_mut()
             .append_pair("client_id", &self.client_id)
             .append_pair("redirect_uri", self.callback_url.as_str())
-            .append_pair("scope", "read:user user:email")
+            .append_pair("scope", "read:user")
             .append_pair("state", state);
         url
     }
