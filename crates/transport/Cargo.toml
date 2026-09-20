@@ -12,13 +12,16 @@ http = "1"
 hyper-util = { version = "0.1", features = ["server", "tokio", "http1", "http2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+secrecy = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
 tower = { version = "0.5", features = ["timeout"] }
 tower-http = { version = "0.6", features = ["timeout"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 mcp-tools = { path = "../mcp-tools" }
+coolify-api = { path = "../coolify-api" }
 oauth = { path = "../oauth" }
 safety = { path = "../safety" }
 identity = { path = "../identity" }

@@ -7,9 +7,10 @@ use axum::{
     response::{IntoResponse, Json, Redirect, Response},
     routing::{get, post},
 };
-use mcp_tools::{McpApplication, ToolResult};
+use mcp_tools::{McpApplication, TenantRequestContext, TenantToolContext, ToolResult};
 use oauth::{AuthorizeRequest, OAuthError, RegistrationRequest, TokenRequest};
 use safety::{AuditEvent, AuditLogger};
+use secrecy::ExposeSecret;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -688,6 +689,58 @@ fn authorized(headers: &HeaderMap, s: &AppState) -> Result<String, StatusCode> {
         .verify_bearer(value, &crate::http::mcp_resource_url(&s.config.public_url))
         .map_err(|_| StatusCode::UNAUTHORIZED)
 }
+fn tenant_error(message: &'static str) -> ToolResult {
+    ToolResult {
+        text: serde_json::to_string(&json!({
+            "error": {"code": "MCP_TOOL_ERROR", "message": message, "details": null},
+            "is_error": true
+        }))
+        .unwrap_or_else(|_| "{\"error\":\"tool unavailable\"}".into()),
+        is_error: true,
+    }
+}
+
+/// Resolve a hosted bearer principal into one request-scoped Coolify client.
+/// This is deliberately the only HTTP-to-tool construction path: failures are
+/// generic and there is no process-global client to fall back to.
+fn tenant_tool_context(s: &AppState, principal: &str) -> Result<TenantToolContext, ToolResult> {
+    let user_id =
+        UserId::parse(principal).ok_or_else(|| tenant_error("tenant authentication required"))?;
+    let hosted = s
+        .config
+        .hosted_auth
+        .as_ref()
+        .ok_or_else(|| tenant_error("tenant connection unavailable"))?;
+    let connection = hosted
+        .tenant
+        .load_connection(user_id)
+        .map_err(|_| tenant_error("tenant connection unavailable"))?
+        .ok_or_else(|| tenant_error("tenant connection unavailable"))?;
+    let token = connection.token.expose_secret().to_owned();
+    let token_source = coolify_api::TokenSource::from_env(&HashMap::from([(
+        "COOLIFY_ACCESS_TOKEN".to_owned(),
+        token,
+    )]))
+    .map_err(|_| tenant_error("tenant connection unavailable"))?;
+    let client = coolify_api::CoolifyClient::new(coolify_api::CoolifyConfig {
+        base_url: connection.base_url,
+        token_source,
+        custom_headers: reqwest::header::HeaderMap::new(),
+        timeout: Duration::from_secs(45),
+    })
+    .map_err(|_| tenant_error("tenant connection unavailable"))?;
+    Ok(TenantToolContext {
+        request: TenantRequestContext {
+            user_id,
+            profile: connection.profile,
+        },
+        client: Arc::new(client),
+        audit: None,
+        instance_registry: None,
+        request_metadata: serde_json::Map::new(),
+    })
+}
+
 fn accepts_json(headers: &HeaderMap) -> bool {
     headers
         .get("accept")
@@ -872,7 +925,18 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
         "initialize" => {
             json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"coolify-mcp","version":env!("CARGO_PKG_VERSION")}}})
         }
-        "tools/list" => json!({"jsonrpc":"2.0","id":id,"result":{"tools":s.app.tools()}}),
+        "tools/list" => {
+            let tools = if s.config.hosted_auth.is_some() {
+                client
+                    .as_deref()
+                    .and_then(|principal| tenant_tool_context(&s, principal).ok())
+                    .map(|context| s.app.tools_for_user(context.request))
+                    .unwrap_or_default()
+            } else {
+                s.app.tools()
+            };
+            json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools}})
+        }
         "tools/call" => {
             let name = request
                 .pointer("/params/name")
@@ -882,7 +946,17 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let r = s.app.call_for_user(client.as_deref(), name, args).await;
+            let r = if s.config.hosted_auth.is_some() {
+                match client.as_deref() {
+                    Some(principal) => match tenant_tool_context(&s, principal) {
+                        Ok(context) => s.app.call_for_user(context, name, args).await,
+                        Err(error) => error,
+                    },
+                    None => tenant_error("tenant authentication required"),
+                }
+            } else {
+                s.app.call(name, args).await
+            };
             audit_event(
                 &s,
                 client.as_deref(),

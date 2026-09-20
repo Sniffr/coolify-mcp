@@ -12,7 +12,8 @@ pub use annotations::ToolAnnotations;
 use coolify_api::{CoolifyApiError, CoolifyClient};
 pub use instances::{Instance, InstanceRegistryError};
 pub use registry::{
-    AuditHook, DEFAULT_TOOL_ROSTER, InstanceRegistry, ToolContext, ToolSpec, registered_tools,
+    AuditHook, DEFAULT_TOOL_ROSTER, InstanceRegistry, TenantRequestContext, TenantToolContext,
+    ToolContext, ToolSpec, registered_tools,
 };
 use reqwest::Method;
 use safety::{Action, allows, frame_untrusted};
@@ -694,6 +695,26 @@ pub async fn call_tool(ctx: ToolContext, name: &str, args: Value) -> ToolResult 
     }
     finish(result)
 }
+
+/// Execute a tool with a client and capability profile resolved for one request.
+/// The conversion keeps the existing typed dispatcher and all safety checks in
+/// one place, while making the tenant boundary explicit to hosted callers.
+pub async fn call_tool_for_tenant(ctx: TenantToolContext, name: &str, args: Value) -> ToolResult {
+    call_tool(
+        ToolContext {
+            client: ctx.client,
+            policy: ctx.request.profile,
+            audit: ctx.audit,
+            instance: None,
+            instance_registry: ctx.instance_registry,
+            request_metadata: ctx.request_metadata,
+        },
+        name,
+        args,
+    )
+    .await
+}
+
 pub trait McpApplication: Send + Sync {
     fn tools(&self) -> Vec<ToolSpec>;
     fn call<'a>(
@@ -702,15 +723,33 @@ pub trait McpApplication: Send + Sync {
         args: Value,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolResult> + Send + 'a>>;
 
-    /// Dispatch a request after transport authentication. Hosted applications
-    /// override this to resolve a tenant-scoped client; local applications keep
-    /// the legacy, process-scoped dispatch via the default implementation.
+    /// Return the roster allowed by the authenticated user's stored profile.
+    /// Local applications retain their existing roster by default.
+    fn tools_for_user(&self, _context: TenantRequestContext) -> Vec<ToolSpec> {
+        self.tools()
+    }
+
+    /// Dispatch after the transport has authenticated a user and resolved a
+    /// request-scoped tenant client. Local applications use `call` unchanged.
     fn call_for_user<'a>(
         &'a self,
-        _user_id: Option<&'a str>,
-        name: &'a str,
-        args: Value,
+        _context: TenantToolContext,
+        _name: &'a str,
+        _args: Value,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolResult> + Send + 'a>> {
-        self.call(name, args)
+        Box::pin(async {
+            ToolResult {
+                text: serde_json::to_string(&json!({
+                    "error": {
+                        "code": "MCP_TOOL_ERROR",
+                        "message": "tenant dispatch unavailable",
+                        "details": null
+                    },
+                    "is_error": true
+                }))
+                .unwrap_or_else(|_| "{\"error\":\"tool unavailable\"}".into()),
+                is_error: true,
+            }
+        })
     }
 }

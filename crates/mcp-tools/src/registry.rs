@@ -4,6 +4,7 @@ use coolify_api::CoolifyClient;
 use safety::CapabilityProfile;
 use serde::Serialize;
 use std::sync::{Arc, LazyLock};
+use tenant::UserId;
 
 const NAMES: [&str; 45] = [
     "application",
@@ -217,6 +218,25 @@ pub struct ToolContext {
     pub policy: CapabilityProfile,
     pub audit: Option<Arc<dyn AuditHook>>,
     pub instance: Option<String>,
+    pub instance_registry: Option<Arc<InstanceRegistry>>,
+    pub request_metadata: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Identity and capability policy resolved by the authenticated transport.
+/// The profile is server-owned: tool arguments cannot replace it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TenantRequestContext {
+    pub user_id: UserId,
+    pub profile: CapabilityProfile,
+}
+
+/// Request-scoped Coolify client and the tenant context it was derived from.
+/// This type intentionally has no process-global client fallback.
+#[derive(Clone)]
+pub struct TenantToolContext {
+    pub request: TenantRequestContext,
+    pub client: Arc<CoolifyClient>,
+    pub audit: Option<Arc<dyn AuditHook>>,
     pub instance_registry: Option<Arc<InstanceRegistry>>,
     pub request_metadata: serde_json::Map<String, serde_json::Value>,
 }

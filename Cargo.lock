@@ -886,6 +886,7 @@ dependencies = [
  "safety",
  "serde",
  "serde_json",
+ "tenant",
  "thiserror",
  "tokio",
  "url",
@@ -1871,6 +1872,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64",
+ "coolify-api",
  "http",
  "hyper-util",
  "identity",

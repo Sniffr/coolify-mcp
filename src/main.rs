@@ -1,13 +1,14 @@
-use mcp_tools::{McpApplication, ToolContext, ToolResult, registered_tools};
+use mcp_tools::{
+    McpApplication, TenantRequestContext, TenantToolContext, ToolContext, ToolResult,
+    registered_tools,
+};
 use reqwest::header::{HeaderName, HeaderValue};
 use safety::{CapabilityProfile, default_profile_for_transport};
-use secrecy::ExposeSecret;
 use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 struct Application {
     context: Option<ToolContext>,
-    hosted_tenant: Option<Arc<tenant::TenantStore>>,
     tools: Vec<mcp_tools::ToolSpec>,
 }
 impl Application {
@@ -36,50 +37,17 @@ impl McpApplication for Application {
         };
         Box::pin(async move { mcp_tools::call_tool(context, name, args).await })
     }
+    fn tools_for_user(&self, context: TenantRequestContext) -> Vec<mcp_tools::ToolSpec> {
+        registered_tools(context.profile, None)
+    }
+
     fn call_for_user<'a>(
         &'a self,
-        user_id: Option<&'a str>,
+        context: TenantToolContext,
         name: &'a str,
         args: Value,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolResult> + Send + 'a>> {
-        let Some(tenants) = self.hosted_tenant.clone() else {
-            return self.call(name, args);
-        };
-        let Some(user_id) = user_id.and_then(tenant::UserId::parse) else {
-            return Box::pin(async { Self::error("tenant authentication required") });
-        };
-        Box::pin(async move {
-            let connection = match tenants.load_connection(user_id) {
-                Ok(Some(connection)) => connection,
-                Ok(None) | Err(_) => return Self::error("tenant connection unavailable"),
-            };
-            let token = connection.token.expose_secret().to_owned();
-            let token_source = match coolify_api::TokenSource::from_env(&HashMap::from([(
-                "COOLIFY_ACCESS_TOKEN".to_owned(),
-                token,
-            )])) {
-                Ok(source) => source,
-                Err(_) => return Self::error("tenant connection unavailable"),
-            };
-            let client = match coolify_api::CoolifyClient::new(coolify_api::CoolifyConfig {
-                base_url: connection.base_url,
-                token_source,
-                custom_headers: reqwest::header::HeaderMap::new(),
-                timeout: Duration::from_secs(45),
-            }) {
-                Ok(client) => Arc::new(client),
-                Err(_) => return Self::error("tenant connection unavailable"),
-            };
-            let context = ToolContext {
-                client,
-                policy: connection.profile,
-                audit: None,
-                instance: None,
-                instance_registry: None,
-                request_metadata: serde_json::Map::new(),
-            };
-            mcp_tools::call_tool(context, name, args).await
-        })
+        Box::pin(async move { mcp_tools::call_tool_for_tenant(context, name, args).await })
     }
 }
 
@@ -177,7 +145,6 @@ async fn run_hosted_http(env: &HashMap<String, String>) -> Result<(), String> {
     let profile = CapabilityProfile::ReadOnly;
     let app = Application {
         context: None,
-        hosted_tenant: Some(tenants.clone()),
         tools: registered_tools(profile, None),
     };
     let persistence_health = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -332,7 +299,6 @@ async fn main() {
     };
     let app = Application {
         context: Some(context),
-        hosted_tenant: None,
         tools: registered_tools(profile, None),
     };
     if let Err(e) = transport::run_stdio(app).await {
