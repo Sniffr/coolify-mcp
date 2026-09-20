@@ -130,6 +130,7 @@ pub struct ToolSpec {
     pub name: String,
     pub title: String,
     pub description: String,
+    #[serde(rename = "inputSchema")]
     pub input_schema: serde_json::Value,
     pub annotations: ToolAnnotations,
     pub safety: String,

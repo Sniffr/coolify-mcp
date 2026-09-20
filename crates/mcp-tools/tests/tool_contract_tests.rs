@@ -41,6 +41,26 @@ fn every_default_tool_has_complete_contract() {
 }
 
 #[test]
+fn serialized_tools_use_mcp_camel_case_keys() {
+    // Claude Code validates tools/list entries against the MCP schema, which
+    // requires `inputSchema`. A snake_case `input_schema` key fails every
+    // tool with `tools.N.inputSchema: Invalid input`.
+    let tools = registered_tools(CapabilityProfile::ReadOnly, None);
+    assert!(!tools.is_empty());
+    for spec in &tools {
+        let value = serde_json::to_value(spec).unwrap();
+        let schema = &value["inputSchema"];
+        assert!(
+            schema.is_object(),
+            "tool {} serializes input_schema instead of inputSchema: {value}",
+            spec.name
+        );
+        assert_eq!(schema["type"], "object");
+        assert!(value.get("input_schema").is_none());
+    }
+}
+
+#[test]
 fn read_only_registration_contains_only_reference_reads() {
     let names: Vec<_> = registered_tools(CapabilityProfile::ReadOnly, None)
         .into_iter()
