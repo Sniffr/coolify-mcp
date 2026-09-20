@@ -49,3 +49,7 @@ path = "tests/client-interop/stdio_client.rs"
 [[bin]]
 name = "http-oauth-interop"
 path = "tests/client-interop/http_oauth.rs"
+
+[[bin]]
+name = "multitenant-http-interop"
+path = "tests/client-interop/multitenant_http.rs"

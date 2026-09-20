@@ -3,7 +3,7 @@ use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     thread,
@@ -18,6 +18,7 @@ struct Counters {
     user_fetches: Arc<AtomicUsize>,
     unauthorized: Arc<AtomicUsize>,
     invalid_codes: Arc<AtomicUsize>,
+    used_codes: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 fn response(status: &str, body: &str) -> String {
@@ -123,15 +124,22 @@ fn handle(mut stream: TcpStream, counters: Counters) {
     let response = match (method, target) {
         ("POST", "/login/oauth/access_token") => {
             counters.token_exchanges.fetch_add(1, Ordering::Relaxed);
-            match parameter(body(&request), "code").as_deref() {
-                Some("fixture-code-a") | Some("fixture-code-b") => response(
+            let code = parameter(body(&request), "code");
+            let valid_code = matches!(
+                code.as_deref(),
+                Some("fixture-code-a") | Some("fixture-code-b")
+            );
+            let unused_code = code
+                .as_ref()
+                .is_some_and(|value| counters.used_codes.lock().unwrap().insert(value.clone()));
+            if valid_code && unused_code {
+                response(
                     "200 OK",
                     r#"{"access_token":"github-fixture-token","token_type":"bearer","scope":"read:user user:email"}"#,
-                ),
-                _ => {
-                    counters.invalid_codes.fetch_add(1, Ordering::Relaxed);
-                    response("400 Bad Request", r#"{"error":"bad_verification_code"}"#)
-                }
+                )
+            } else {
+                counters.invalid_codes.fetch_add(1, Ordering::Relaxed);
+                response("400 Bad Request", r#"{"error":"bad_verification_code"}"#)
             }
         }
         ("GET", "/user") => {

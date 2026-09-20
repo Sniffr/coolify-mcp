@@ -93,8 +93,10 @@ async fn run_hosted_http(env: &HashMap<String, String>) -> Result<(), String> {
         .expect("hosted environment was validated");
     let public_url = transport::normalize_public_url_with_insecure(
         raw_public_url,
-        env.get("MCP_ALLOW_INSECURE_HTTP")
-            .is_some_and(|v| v.eq_ignore_ascii_case("true")),
+        cfg!(debug_assertions)
+            && env
+                .get("MCP_ALLOW_INSECURE_HTTP")
+                .is_some_and(|v| v.eq_ignore_ascii_case("true")),
     )
     .map_err(|e| e.to_string())?;
 
@@ -126,7 +128,11 @@ async fn run_hosted_http(env: &HashMap<String, String>) -> Result<(), String> {
         .get("GITHUB_CALLBACK_URL")
         .ok_or_else(|| "GITHUB_CALLBACK_URL is required in HTTP mode".to_owned())
         .and_then(|v| url::Url::parse(v).map_err(|_| "invalid GITHUB_CALLBACK_URL".to_owned()))?;
-    if callback_url.scheme() != "https"
+    let allow_insecure = cfg!(debug_assertions)
+        && env
+            .get("MCP_ALLOW_INSECURE_HTTP")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+    if (callback_url.scheme() != "https" && !(allow_insecure && callback_url.scheme() == "http"))
         || callback_url.host_str().is_none()
         || callback_url.query().is_some()
         || callback_url.fragment().is_some()
@@ -138,12 +144,48 @@ async fn run_hosted_http(env: &HashMap<String, String>) -> Result<(), String> {
     {
         return Err("GITHUB_CALLBACK_URL must be the service HTTPS callback".into());
     }
-    let github = Arc::new(identity::GitHubIdentityProvider::new(
-        github_client_id,
-        secrecy::SecretString::from(github_secret),
-        callback_url,
-        reqwest::Client::new(),
-    ));
+    let github = if let (Some(token_endpoint), Some(user_endpoint)) = (
+        env.get("MCP_GITHUB_TOKEN_ENDPOINT"),
+        env.get("MCP_GITHUB_USER_ENDPOINT"),
+    ) {
+        let local_fixture = cfg!(debug_assertions)
+            && env
+                .get("MCP_HOSTED_INSECURE_LOCAL_TARGETS")
+                .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+            && env
+                .get("MCP_ALLOW_INSECURE_HTTP")
+                .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        let token_endpoint = url::Url::parse(token_endpoint)
+            .map_err(|_| "invalid MCP_GITHUB_TOKEN_ENDPOINT".to_owned())?;
+        let user_endpoint = url::Url::parse(user_endpoint)
+            .map_err(|_| "invalid MCP_GITHUB_USER_ENDPOINT".to_owned())?;
+        if !local_fixture
+            || token_endpoint.scheme() != "http"
+            || user_endpoint.scheme() != "http"
+            || !matches!(token_endpoint.host_str(), Some("127.0.0.1" | "localhost"))
+            || !matches!(user_endpoint.host_str(), Some("127.0.0.1" | "localhost"))
+        {
+            return Err(
+                "GitHub fixture endpoints are only allowed for local debug acceptance".into(),
+            );
+        }
+        identity::GitHubIdentityProvider::with_endpoints(
+            github_client_id,
+            secrecy::SecretString::from(github_secret),
+            callback_url,
+            reqwest::Client::new(),
+            token_endpoint,
+            user_endpoint,
+        )
+    } else {
+        identity::GitHubIdentityProvider::new(
+            github_client_id,
+            secrecy::SecretString::from(github_secret),
+            callback_url,
+            reqwest::Client::new(),
+        )
+    };
+    let github = Arc::new(github);
 
     let host = env
         .get("MCP_HOST")

@@ -70,7 +70,8 @@ fn read_only_registration_contains_only_reference_reads() {
             "search_docs",
             "server_domains",
             "server_resources",
-            "teams"
+            "teams",
+            "list_instances"
         ]
     );
 }

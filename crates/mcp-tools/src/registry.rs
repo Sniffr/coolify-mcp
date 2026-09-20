@@ -176,7 +176,7 @@ pub fn registered_tools(
 ) -> Vec<ToolSpec> {
     let fleet_mode = fleet.is_some_and(InstanceRegistry::is_fleet);
     let mut names: Vec<&str> = NAMES.into_iter().collect();
-    if fleet_mode {
+    if fleet_mode || profile == CapabilityProfile::ReadOnly {
         names.push("list_instances");
     }
     names

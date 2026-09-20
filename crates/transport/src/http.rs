@@ -42,11 +42,18 @@ pub fn validate_hosted_environment(env: &HashMap<String, String>) -> Result<(), 
         }
     }
 
-    let public_url = normalize_public_url(env.get("MCP_PUBLIC_URL").expect("checked above"))
-        .map_err(|_| "invalid MCP_PUBLIC_URL".to_owned())?;
+    let allow_insecure = cfg!(debug_assertions)
+        && env
+            .get("MCP_ALLOW_INSECURE_HTTP")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+    let public_url = normalize_public_url_with_insecure(
+        env.get("MCP_PUBLIC_URL").expect("checked above"),
+        allow_insecure,
+    )
+    .map_err(|_| "invalid MCP_PUBLIC_URL".to_owned())?;
     let callback = Url::parse(env.get("GITHUB_CALLBACK_URL").expect("checked above"))
         .map_err(|_| "invalid GITHUB_CALLBACK_URL".to_owned())?;
-    if callback.scheme() != "https"
+    if (callback.scheme() != "https" && !(allow_insecure && callback.scheme() == "http"))
         || callback.host_str().is_none()
         || callback.query().is_some()
         || callback.fragment().is_some()
