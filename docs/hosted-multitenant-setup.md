@@ -57,12 +57,69 @@ Keep `/data` persistent and private. Confirm health through Caddy at `https://mc
 
 Use the URL only—do not paste a Coolify token into Claude or OpenCode configuration.
 
-- **Claude:** add the remote MCP server URL `https://mcp.social.dpdns.org/mcp` using Claude's remote MCP/server settings. Open the authorization link when prompted, sign in with GitHub, and approve the identity-only request.
+- **Claude Code CLI:**
+
+  ```bash
+  claude mcp add --transport http coolify https://mcp.social.dpdns.org/mcp
+  claude mcp login coolify   # approve GitHub in the browser
+  claude mcp list            # want: coolify - ✔ Connected
+  claude mcp get coolify
+  # re-auth: claude mcp logout coolify && claude mcp login coolify
+  # remove:  claude mcp remove coolify -s local
+  ```
+
+- **Claude Desktop:** Settings → Connectors → add a remote MCP server with URL `https://mcp.social.dpdns.org/mcp`. Approve the GitHub login in the browser.
 - **OpenCode:** add a remote MCP server whose URL is `https://mcp.social.dpdns.org/mcp` using the remote/URL-only MCP configuration. Start the OAuth login flow in the browser and approve GitHub.
 
 After login, open `https://mcp.social.dpdns.org/settings` in the same browser session. Enter your own Coolify base URL and API token, choose a capability profile, and save. The form validates the connection and returns only safe metadata (hostname, configured status, profile, and validation time); it never displays the token.
 
+URL rules: server root only — ✅ `https://coolify.example.com`, ✅ `http://203.0.113.10:8000` (plain-http works with an unencrypted-token warning); ❌ trailing `/api/v1`, ❌ missing scheme, ❌ `localhost`/private-LAN/`*.local` (the server must reach Coolify directly).
+
 The default profile is **read-only**. Keep it for inventory and diagnostics. `operations` and `admin` expand capabilities and should be selected only when justified; write, deploy, and delete tools still require the existing confirmation safeguards.
+
+## 5. Verify the service and try sample commands
+
+```bash
+curl -fsS https://mcp.social.dpdns.org/healthz
+curl -fsS https://mcp.social.dpdns.org/.well-known/oauth-authorization-server | head -c 400; echo
+MCP_ENV_FILE=/home/sidney/coolify-mcp/secrets/multitenant.env BASE_URL=https://mcp.social.dpdns.org bash deploy/remote-check.sh
+```
+
+Then in Claude (read-only first):
+
+```text
+List my Coolify servers and their status.
+Show an infrastructure overview of my Coolify estate.
+List all applications and which ones are unhealthy.
+Get details for application <name-or-uuid>.
+Show the last 100 lines of logs for <app>.
+Diagnose why <app> is failing.
+Find issues across my Coolify estate.
+What Coolify version am I running?
+```
+
+Writes/deploys (needs `operations`/`admin` + confirmation):
+
+```text
+List recent deployments and their status.
+Redeploy <app> and watch it finish.
+Restart all apps in project <name>.
+Show environment variables for <app>.
+```
+
+Tool inventory (45 tools): read-only is `get_version`, `get_mcp_version`,
+`get_infrastructure_overview`, `list_servers`, `list_applications`,
+`list_databases`, `list_services`, `list_deployments`, `get_server`,
+`get_application`, `get_database`, `get_service`, `server_resources`,
+`server_domains`, `list_destinations`, `diagnose_app`, `diagnose_server`,
+`find_issues`, `search_docs`, `application_logs`, `logs`, `teams`;
+`operations`/`admin` add `application`, `bulk_env_update`, `cloud_tokens`,
+`control`, `database`, `database_backups`, `deploy`, `deployment`, `env_vars`,
+`environments`, `github_apps`, `hetzner`, `private_keys`, `projects`,
+`redeploy_project`, `restart_project_apps`, `scheduled_tasks`, `service`,
+`stop_all_apps`, `storages`, `system`, `tags`, `validate_server`.
+
+Full end-user guide with error tables: [`using-the-hosted-mcp.md`](using-the-hosted-mcp.md).
 
 ## Rotation and deletion
 

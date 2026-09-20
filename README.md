@@ -2,18 +2,51 @@
 
 > Give Claude Code, OpenHands, and OpenCode a safe, reusable MCP connection to Coolify.
 
+## ☁️ Hosted quickstart (recommended for Claude Code/Desktop)
+
+No install, no local env files — connect to the shared endpoint, log in with
+GitHub, save your own Coolify URL/token:
+
+```bash
+claude mcp add --transport http coolify https://mcp.social.dpdns.org/mcp
+claude mcp login coolify
+```
+
+Then open `https://mcp.social.dpdns.org/settings` in the same browser,
+save your Coolify base URL (root only, no `/api/v1`) + API token, and verify:
+
+```bash
+claude mcp list   # want: coolify - ✔ Connected
+```
+
+Full walkthrough, sample prompts, URL rules, and every error message
+explained: [`docs/using-the-hosted-mcp.md`](docs/using-the-hosted-mcp.md).
+
 [![MCP](https://img.shields.io/badge/MCP-compatible-7c3aed?style=for-the-badge)](https://modelcontextprotocol.io/) [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=for-the-badge&logo=python&logoColor=white)](https://python.org/) [![Coolify](https://img.shields.io/badge/Coolify-API-00b894?style=for-the-badge)](https://coolify.io/docs/api/overview)
 
 ## ⚡ What it does
 
-This dependency-free MCP server exposes Coolify through two tools:
+The Rust server (current default) exposes **45 typed Coolify tools** over MCP —
+servers, applications, databases, services, deployments, logs, diagnostics,
+environments, backups, tasks, domains, and docs search. The dependency-free
+Python `coolify_mcp_server.py` remains as a local stdio fallback with
+`coolify_health` + `coolify_request`.
 
-- `coolify_health` — public reachability check.
-- `coolify_request` — documented REST requests under `/api/v1`.
+Capability profiles gate the roster server-side (tool arguments cannot escalate):
 
-It keeps the API key in environment variables rather than prompts, tool arguments, source code, or Git history.
+- `read-only` (default, 23 tools): list/inspect, `application_logs`/`logs`,
+  `diagnose_app`/`diagnose_server`, `find_issues`, `search_docs`, versions,
+  `teams`. Start here.
+- `operations`: plus confirmed restarts, redeploys, env updates.
+- `admin`: full control including destructive actions — always confirmed.
 
-> ⚠️ `coolify_request` is intentionally powerful. Configure a least-privilege Coolify token and require confirmation before deployments, restarts, stops, deletes, writes, production changes, or sensitive reads.
+It keeps API keys in environment variables (local) or per-user encrypted
+storage (hosted) rather than prompts, tool arguments, source code, or Git history.
+
+> ⚠️ Write/deploy/delete tools are intentionally powerful. Use a
+> least-privilege Coolify token, start `read-only`, and require confirmation
+> before deployments, restarts, stops, deletes, writes, production changes, or
+> sensitive reads.
 
 ## 🔐 Configure credentials
 
@@ -191,10 +224,58 @@ You can deploy this repository as a private application on Coolify, but a hosted
 
 ## 📚 Documentation
 
+- [Using the hosted MCP — connect, Settings, sample prompts, errors](docs/using-the-hosted-mcp.md) ← start here for the live service
 - [Hosting and security guide](HOSTING.md)
+- [Hosted multi-tenant setup (operator)](docs/hosted-multitenant-setup.md)
 - [Complete API + LLM reference](coolify-api-llm-reference.md)
 - [Official Coolify API docs](https://coolify.io/docs/api/overview)
 - [Official OpenAPI snapshot](https://raw.githubusercontent.com/coollabsio/coolify/main/openapi.json)
+
+## 🗣️ Sample prompts and verification (hosted)
+
+After `claude mcp list` shows `coolify - ✔ Connected`:
+
+```bash
+claude mcp get coolify   # server entry, transport, scope
+curl -fsS https://mcp.social.dpdns.org/healthz
+curl -fsS https://mcp.social.dpdns.org/.well-known/oauth-authorization-server
+```
+
+Ask Claude (read-only first):
+
+```text
+List my Coolify servers and their status.
+Show an infrastructure overview of my Coolify estate.
+List all applications and which ones are unhealthy.
+Get details for application <name-or-uuid>.
+Show the last 100 lines of logs for <app>.
+Diagnose why <app> is failing and suggest the fix.
+Find issues across my Coolify estate.
+What Coolify version am I running?
+List my databases and their backup status.
+```
+
+Writes/deploys (needs `operations`/`admin` profile + confirmation):
+
+```text
+List recent deployments and their status.
+Redeploy <app> and watch it finish.
+Restart all apps in project <name>.
+Show environment variables for <app>.
+Check server resources for <server>.
+```
+
+Full tool inventory (45 tools): `get_version`, `get_mcp_version`,
+`get_infrastructure_overview`, `list_servers`, `list_applications`,
+`list_databases`, `list_services`, `list_deployments`, `get_server`,
+`get_application`, `get_database`, `get_service`, `server_resources`,
+`server_domains`, `list_destinations`, `diagnose_app`, `diagnose_server`,
+`find_issues`, `search_docs`, `application_logs`, `logs`, `teams` (read-only);
+plus `application`, `bulk_env_update`, `cloud_tokens`, `control`, `database`,
+`database_backups`, `deploy`, `deployment`, `env_vars`, `environments`,
+`github_apps`, `hetzner`, `private_keys`, `projects`, `redeploy_project`,
+`restart_project_apps`, `scheduled_tasks`, `service`, `stop_all_apps`,
+`storages`, `system`, `tags`, `validate_server` (operations/admin).
 
 ## 🛡️ Security checklist
 

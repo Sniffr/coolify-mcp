@@ -13,6 +13,17 @@ The production endpoint is `https://mcp.social.dpdns.org/mcp`. Follow [`docs/hos
 5. Configure Caddy as `mcp.social.dpdns.org { reverse_proxy mcp:8080 }` and validate `/healthz` before client login.
 6. Configure Claude or OpenCode with the remote URL only: `https://mcp.social.dpdns.org/mcp`. Complete GitHub login in a browser, then save your Coolify connection at `/settings`.
 
+```bash
+# Claude Code CLI
+claude mcp add --transport http coolify https://mcp.social.dpdns.org/mcp
+claude mcp login coolify
+claude mcp list   # want: coolify - ✔ Connected
+claude mcp get coolify
+```
+
+End-user walkthrough with sample prompts, URL rules, and every Settings/Claude
+error explained: [`docs/using-the-hosted-mcp.md`](../docs/using-the-hosted-mcp.md).
+
 HTTP defaults to `read-only`; use `operations` or `admin` only after review. Existing confirmation checks still protect writes, deploys, and deletes. Rotate a connection by saving a replacement token in Settings. Delete it there to remove ciphertext and revoke the user's grants. Preserve `/data` and the encryption key during upgrades and rollback.
 
 ## Local stdio (no public endpoint)
@@ -43,6 +54,16 @@ Use an OS secret manager or a mode-0600 environment file; never commit or paste 
 - OAuth failures: callback URL, public HTTPS URL, and GitHub client pair must match exactly.
 - Settings failures: the user's Coolify host must be reachable from the container and the user's token must allow the selected read-only validation.
 - Caddy failures: both Caddy and `mcp` must be attached to `brightbean-studio_default`; use upstream `mcp:8080`, not a host port.
+
+```bash
+# operator checks (no secrets printed)
+curl -fsS https://mcp.social.dpdns.org/healthz
+curl -fsS https://mcp.social.dpdns.org/.well-known/oauth-authorization-server | head -c 400; echo
+MCP_ENV_FILE=/home/sidney/coolify-mcp/secrets/multitenant.env BASE_URL=https://mcp.social.dpdns.org bash deploy/remote-check.sh
+```
+
+User-side error tables (Claude `mcp list` messages, Settings red banners) and
+sample prompts live in [`docs/using-the-hosted-mcp.md`](../docs/using-the-hosted-mcp.md) — point users there instead of debugging blind.
 
 Rollback by stopping the new service and restoring the previous image and Caddyfile backup. Keep `/data` and protected secrets intact; do not revoke credentials as part of rollback. See `deploy/remote-check.sh` for safe public health/discovery checks.
 
