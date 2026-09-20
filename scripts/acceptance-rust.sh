@@ -50,12 +50,15 @@ import json, pathlib, sys
 coolify, github = json.loads(sys.argv[1]), json.loads(sys.argv[2])
 assert coolify["unauthorized"] == 0, coolify
 assert coolify["unknown_paths"] == 0, coolify
-assert coolify["requests"] == 6, coolify
+assert coolify["requests"] == 8, coolify
+assert coolify["poisoned_logs"] == 2, coolify
 assert coolify["calls"] == [
   "GET /api/v1/version user_a", "GET /api/v1/version user_a",
   "GET /api/v1/applications?page=1&per_page=50 user_a",
+  "GET /api/v1/applications/app-a/logs?lines=20 user_a",
   "GET /api/v1/version user_b", "GET /api/v1/version user_b",
   "GET /api/v1/applications?page=1&per_page=50 user_b",
+  "GET /api/v1/applications/app-b/logs?lines=20 user_b",
 ], coolify
 assert github["unauthorized"] == 0 and github["invalid_codes"] == 0, github
 assert github["token_exchanges"] == 2 and github["user_fetches"] == 2, github
