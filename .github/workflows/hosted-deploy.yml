@@ -87,7 +87,10 @@ jobs:
     timeout-minutes: 15
     environment: production
     env:
-      DEPLOY_IMAGE: ghcr.io/${{ github.repository_owner }}/coolify-mcp:multitenant
+      # GHCR requires lowercase repository paths; github.repository_owner keeps
+      # its original case ("Sniffr"), which docker rejects as an invalid
+      # reference, so the owner is hardcoded lowercase here.
+      DEPLOY_IMAGE: ghcr.io/sniffr/coolify-mcp:multitenant
     steps:
       - uses: actions/checkout@v4
       - name: Deploy over SSH
