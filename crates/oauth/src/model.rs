@@ -20,7 +20,7 @@ pub struct RegistrationResponse {
     pub client_secret: String,
     pub redirect_uris: Vec<String>,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizeRequest {
     pub client_id: String,
     pub redirect_uri: String,

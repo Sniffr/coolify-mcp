@@ -13,7 +13,7 @@ use mcp_tools::{McpApplication, TenantRequestContext, TenantToolContext, ToolRes
 use oauth::{AuthorizeRequest, OAuthError, RegistrationRequest, TokenRequest};
 use safety::{AuditEvent, AuditLogger};
 use secrecy::ExposeSecret;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -64,6 +64,11 @@ struct PendingAuthorization {
     request: AuthorizeRequest,
     client_state: String,
     expires_at: Instant,
+}
+#[derive(Serialize, Deserialize)]
+struct PendingAuthorizationRecord {
+    request: AuthorizeRequest,
+    client_state: String,
 }
 
 #[derive(Clone)]
@@ -340,13 +345,27 @@ async fn github_start(
         return auth_failure();
     }
     let github_state = uuid::Uuid::new_v4().to_string();
-    s.browser.lock().unwrap().github.insert(
-        github_state.clone(),
-        GithubContinuation {
-            mcp_state: query.state,
-            expires_at: Instant::now() + Duration::from_secs(600),
+    let continuation = GithubContinuation {
+        mcp_state: query.state,
+        expires_at: Instant::now() + Duration::from_secs(600),
+    };
+    if !persist_session(
+        &s,
+        &github_state,
+        "github",
+        None,
+        &GithubContinuationRecord {
+            mcp_state: continuation.mcp_state.clone(),
         },
-    );
+        Duration::from_secs(600),
+    ) {
+        return persistence_unavailable();
+    }
+    s.browser
+        .lock()
+        .unwrap()
+        .github
+        .insert(github_state.clone(), continuation);
     let mut response =
         Redirect::to(hosted.github.authorization_url(&github_state).as_str()).into_response();
     response.headers_mut().append(
@@ -381,18 +400,49 @@ async fn github_callback(
         return auth_failure();
     }
     cleanup_browser(&s);
-    let Some(continuation) = s.browser.lock().unwrap().github.remove(&state) else {
+    let continuation = s
+        .browser
+        .lock()
+        .unwrap()
+        .github
+        .remove(&state)
+        .map(|value| GithubContinuationRecord {
+            mcp_state: value.mcp_state,
+        })
+        .or_else(|| {
+            consume_json_session::<GithubContinuationRecord>(&s, &state, "github")
+                .map(|(value, _)| value)
+        });
+    let Some(continuation) = continuation else {
         return auth_failure();
     };
-    let Some(pending) = s
+    if let Some(store) = tenant_store(&s) {
+        let _ = store.delete_session(&state, "github");
+    }
+    let pending = s
         .browser
         .lock()
         .unwrap()
         .pending
         .remove(&continuation.mcp_state)
-    else {
+        .map(|value| PendingAuthorizationRecord {
+            request: value.request,
+            client_state: value.client_state,
+        })
+        .or_else(|| {
+            consume_json_session::<PendingAuthorizationRecord>(
+                &s,
+                &continuation.mcp_state,
+                "pending",
+            )
+            .map(|(value, _)| value)
+        });
+    let Some(pending) = pending else {
         return auth_failure();
     };
+    if let Some(store) = tenant_store(&s) {
+        let _ = store.delete_session(&continuation.mcp_state, "pending");
+    }
     let github_user = match hosted.github.exchange_callback(&code).await {
         Ok(user) => user,
         Err(_) => return auth_failure(),
@@ -425,6 +475,16 @@ async fn github_callback(
     }
     let browser_session = uuid::Uuid::new_v4().to_string();
     let csrf = uuid::Uuid::new_v4().to_string();
+    if !persist_session(
+        &s,
+        &browser_session,
+        "browser",
+        Some(user.id),
+        &BrowserSessionRecord { csrf: csrf.clone() },
+        s.config.session_ttl,
+    ) {
+        return auth_failure();
+    }
     s.browser.lock().unwrap().sessions.insert(
         browser_session.clone(),
         (user.id, Instant::now() + s.config.session_ttl, csrf.clone()),
@@ -660,6 +720,68 @@ async fn settings_logout(State(s): State<AppState>, headers: HeaderMap, body: By
     response
 }
 
+#[derive(Serialize, Deserialize)]
+struct GithubContinuationRecord {
+    mcp_state: String,
+}
+#[derive(Serialize, Deserialize)]
+struct BrowserSessionRecord {
+    csrf: String,
+}
+#[derive(Serialize, Deserialize)]
+struct McpSessionRecord {
+    principal: String,
+}
+
+fn tenant_store(s: &AppState) -> Option<&tenant::TenantStore> {
+    s.config.hosted_auth.as_ref().map(|h| h.tenant.as_ref())
+}
+fn persist_session(
+    s: &AppState,
+    id: &str,
+    kind: &str,
+    user: Option<UserId>,
+    payload: &impl Serialize,
+    ttl: Duration,
+) -> bool {
+    let Some(store) = tenant_store(s) else {
+        return true;
+    };
+    serde_json::to_vec(payload).ok().is_some_and(|bytes| {
+        store
+            .put_session(
+                id,
+                kind,
+                user,
+                &bytes,
+                unix_timestamp() + ttl.as_secs() as i64,
+            )
+            .is_ok()
+    })
+}
+fn load_json_session<T: for<'de> Deserialize<'de>>(
+    s: &AppState,
+    id: &str,
+    kind: &str,
+) -> Option<(T, Option<UserId>)> {
+    let record = tenant_store(s)?.load_session(id, kind).ok()??;
+    Some((
+        serde_json::from_slice(&record.payload).ok()?,
+        record.user_id,
+    ))
+}
+fn consume_json_session<T: for<'de> Deserialize<'de>>(
+    s: &AppState,
+    id: &str,
+    kind: &str,
+) -> Option<(T, Option<UserId>)> {
+    let record = tenant_store(s)?.consume_session(id, kind).ok()??;
+    Some((
+        serde_json::from_slice(&record.payload).ok()?,
+        record.user_id,
+    ))
+}
+
 fn unix_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -684,23 +806,34 @@ fn cleanup_browser(s: &AppState) {
 fn browser_user(s: &AppState, headers: &HeaderMap) -> Option<UserId> {
     let session = cookie(headers, "mcp_session")?;
     cleanup_browser(s);
-    s.browser
+    if let Some(user_id) = s
+        .browser
         .lock()
         .unwrap()
         .sessions
         .get(&session)
         .map(|(user_id, _, _)| *user_id)
+    {
+        return Some(user_id);
+    }
+    load_json_session::<BrowserSessionRecord>(s, &session, "browser").and_then(|(_, user)| user)
 }
 
 fn browser_session(s: &AppState, headers: &HeaderMap) -> Option<(UserId, String)> {
     let session = cookie(headers, "mcp_session")?;
     cleanup_browser(s);
-    s.browser
+    if let Some(value) = s
+        .browser
         .lock()
         .unwrap()
         .sessions
         .get(&session)
         .map(|(user_id, _, csrf)| (*user_id, csrf.clone()))
+    {
+        return Some(value);
+    }
+    load_json_session::<BrowserSessionRecord>(s, &session, "browser")
+        .and_then(|(record, user)| Some((user?, record.csrf)))
 }
 
 fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -798,12 +931,20 @@ async fn authorize(
         let mut pending_request = req;
         pending_request.state = service_state;
         cleanup_browser(&s);
+        let pending_record = PendingAuthorizationRecord {
+            request: pending_request.clone(),
+            client_state: client_state.clone(),
+        };
+        let ttl = s.config.session_ttl.min(Duration::from_secs(600));
+        if !persist_session(&s, &mcp_state, "pending", None, &pending_record, ttl) {
+            return persistence_unavailable();
+        }
         s.browser.lock().unwrap().pending.insert(
             mcp_state.clone(),
             PendingAuthorization {
                 request: pending_request,
                 client_state,
-                expires_at: Instant::now() + s.config.session_ttl.min(Duration::from_secs(600)),
+                expires_at: Instant::now() + ttl,
             },
         );
         let mut location = crate::http::public_base(&s.config.public_url);
@@ -1051,7 +1192,9 @@ fn session_valid(s: &AppState, id: &str, principal: &str) -> bool {
         *seen = Instant::now();
         true
     } else {
-        false
+        drop(sessions);
+        load_json_session::<McpSessionRecord>(s, id, "mcp")
+            .is_some_and(|(record, _)| record.principal == principal)
     }
 }
 async fn mcp_delete(State(s): State<AppState>, headers: HeaderMap) -> Response {
@@ -1068,6 +1211,9 @@ async fn mcp_delete(State(s): State<AppState>, headers: HeaderMap) -> Response {
         .get(id)
         .is_some_and(|(owner, _)| owner == &principal);
     if owned && s.sessions.lock().unwrap().remove(id).is_some() {
+        if let Some(store) = tenant_store(&s) {
+            let _ = store.delete_session(id, "mcp");
+        }
         StatusCode::NO_CONTENT.into_response()
     } else {
         StatusCode::NOT_FOUND.into_response()
@@ -1267,13 +1413,20 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
                 .into_response();
         }
         let id = uuid::Uuid::new_v4().to_string();
-        sessions.insert(
-            id.clone(),
-            (
-                client.as_deref().unwrap_or_default().to_owned(),
-                Instant::now(),
-            ),
-        );
+        let principal = client.as_deref().unwrap_or_default().to_owned();
+        sessions.insert(id.clone(), (principal.clone(), Instant::now()));
+        if s.config.hosted_auth.is_some()
+            && !persist_session(
+                &s,
+                &id,
+                "mcp",
+                UserId::parse(&principal),
+                &McpSessionRecord { principal },
+                s.config.session_ttl,
+            )
+        {
+            return persistence_unavailable();
+        }
         id
     };
     let mut response = Json(response).into_response();

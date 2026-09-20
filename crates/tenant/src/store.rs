@@ -59,6 +59,26 @@ impl TenantStore {
                  CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id);",
             )
             .map_err(|_| TenantError::Storage)?;
+        let columns: std::collections::HashSet<String> = connection
+            .prepare("PRAGMA table_info(sessions)")
+            .map_err(|_| TenantError::Storage)?
+            .query_map([], |row| row.get(1))
+            .map_err(|_| TenantError::Storage)?
+            .collect::<Result<_, _>>()
+            .map_err(|_| TenantError::Storage)?;
+        if !columns.contains("kind") {
+            connection
+                .execute(
+                    "ALTER TABLE sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'legacy'",
+                    [],
+                )
+                .map_err(|_| TenantError::Storage)?;
+        }
+        if !columns.contains("payload") {
+            connection
+                .execute("ALTER TABLE sessions ADD COLUMN payload BLOB", [])
+                .map_err(|_| TenantError::Storage)?;
+        }
 
         // A key can be syntactically valid while being wrong for an existing
         // database. Verify every stored ciphertext before reporting readiness;
@@ -320,6 +340,122 @@ impl TenantStore {
         transaction.commit().map_err(|_| TenantError::Storage)
     }
 
+    pub fn put_session(
+        &self,
+        id: &str,
+        kind: &str,
+        user_id: Option<UserId>,
+        payload: &[u8],
+        expires_at: i64,
+    ) -> Result<(), TenantError> {
+        let state_hash = hash_state(id);
+        let label = format!("session:{kind}:{state_hash}");
+        let ciphertext = self.encryption_key.encrypt_blob(&label, payload)?;
+        let connection = self.lock_connection()?;
+        connection
+            .execute(
+                "INSERT INTO sessions (id, user_id, state_hash, expires_at, kind, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id, state_hash=excluded.state_hash,
+                 expires_at=excluded.expires_at, kind=excluded.kind, payload=excluded.payload",
+                params![
+                    state_hash,
+                    user_id.map(|v| v.to_string()),
+                    state_hash,
+                    expires_at,
+                    kind,
+                    ciphertext
+                ],
+            )
+            .map_err(|_| TenantError::Storage)?;
+        Ok(())
+    }
+
+    pub fn load_session(
+        &self,
+        id: &str,
+        kind: &str,
+    ) -> Result<Option<crate::SessionRecord>, TenantError> {
+        let state_hash = hash_state(id);
+        let now = unix_timestamp();
+        let connection = self.lock_connection()?;
+        let row = connection.query_row(
+            "SELECT user_id, payload, expires_at FROM sessions WHERE id=?1 AND state_hash=?2 AND kind=?3 AND expires_at>=?4",
+            params![state_hash, state_hash, kind, now],
+            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Vec<u8>>(1)?, row.get::<_, i64>(2)?)),
+        ).optional().map_err(|_| TenantError::Storage)?;
+        let Some((user, ciphertext, expires_at)) = row else {
+            return Ok(None);
+        };
+        let label = format!("session:{kind}:{state_hash}");
+        let payload = self.encryption_key.decrypt_blob(&label, &ciphertext)?;
+        Ok(Some(crate::SessionRecord {
+            kind: kind.to_owned(),
+            user_id: user.as_deref().and_then(UserId::parse),
+            payload,
+            expires_at,
+        }))
+    }
+
+    pub fn consume_session(
+        &self,
+        id: &str,
+        kind: &str,
+    ) -> Result<Option<crate::SessionRecord>, TenantError> {
+        let state_hash = hash_state(id);
+        let mut connection = self.lock_connection()?;
+        let transaction = connection.transaction().map_err(|_| TenantError::Storage)?;
+        let row = transaction.query_row(
+            "SELECT user_id, payload, expires_at FROM sessions WHERE id=?1 AND state_hash=?2 AND kind=?3 AND expires_at>=?4",
+            params![state_hash, state_hash, kind, unix_timestamp()],
+            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Vec<u8>>(1)?, row.get::<_, i64>(2)?)),
+        ).optional().map_err(|_| TenantError::Storage)?;
+        let Some((user, ciphertext, expires_at)) = row else {
+            return Ok(None);
+        };
+        let label = format!("session:{kind}:{state_hash}");
+        let payload = self.encryption_key.decrypt_blob(&label, &ciphertext)?;
+        transaction
+            .execute(
+                "DELETE FROM sessions WHERE id=?1 AND kind=?2",
+                params![state_hash, kind],
+            )
+            .map_err(|_| TenantError::Storage)?;
+        transaction.commit().map_err(|_| TenantError::Storage)?;
+        let user_id = match user.as_deref() {
+            None => None,
+            Some(value) => Some(UserId::parse(value).ok_or(TenantError::CorruptData)?),
+        };
+        Ok(Some(crate::SessionRecord {
+            kind: kind.to_owned(),
+            user_id,
+            payload,
+            expires_at,
+        }))
+    }
+
+    pub fn delete_session(&self, id: &str, kind: &str) -> Result<(), TenantError> {
+        let connection = self.lock_connection()?;
+        connection
+            .execute(
+                "DELETE FROM sessions WHERE id=?1 AND kind=?2",
+                params![hash_state(id), kind],
+            )
+            .map_err(|_| TenantError::Storage)?;
+        Ok(())
+    }
+
+    pub fn purge_expired_sessions(&self) -> Result<(), TenantError> {
+        let connection = self.lock_connection()?;
+        connection
+            .execute(
+                "DELETE FROM sessions WHERE expires_at < ?1",
+                [unix_timestamp()],
+            )
+            .map_err(|_| TenantError::Storage)?;
+        Ok(())
+    }
+
     fn lock_connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, TenantError> {
         self.connection.lock().map_err(|_| TenantError::Storage)
     }
@@ -380,6 +516,12 @@ fn validate_url(url: &Url) -> Result<(), TenantError> {
 fn non_empty(value: &str) -> Option<&str> {
     let value = value.trim();
     (!value.is_empty()).then_some(value)
+}
+
+fn hash_state(value: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(value.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn unix_timestamp() -> i64 {

@@ -113,6 +113,45 @@ fn same_key_survives_restart_and_wrong_key_fails_closed() {
     assert!(TenantStore::open(&path, OTHER_KEY).is_err());
 }
 
+#[test]
+fn session_payload_is_encrypted_persistent_and_single_use() {
+    let (_directory, path) = store_path();
+    let store = TenantStore::open(&path, KEY).unwrap();
+    store
+        .put_session(
+            "opaque-cookie",
+            "browser",
+            None,
+            b"fixture-csrf",
+            9_999_999_999,
+        )
+        .unwrap();
+    let raw = fs::read(&path).unwrap();
+    assert!(!String::from_utf8_lossy(&raw).contains("fixture-csrf"));
+    drop(store);
+    let reopened = TenantStore::open(&path, KEY).unwrap();
+    assert_eq!(
+        reopened
+            .load_session("opaque-cookie", "browser")
+            .unwrap()
+            .unwrap()
+            .payload,
+        b"fixture-csrf"
+    );
+    assert!(
+        reopened
+            .consume_session("opaque-cookie", "browser")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        reopened
+            .consume_session("opaque-cookie", "browser")
+            .unwrap()
+            .is_none()
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn database_parent_directory_must_be_private() {

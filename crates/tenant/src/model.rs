@@ -56,3 +56,11 @@ pub struct TenantGrant {
     pub resource: String,
     pub created_at: i64,
 }
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SessionRecord {
+    pub kind: String,
+    pub user_id: Option<UserId>,
+    pub payload: Vec<u8>,
+    pub expires_at: i64,
+}

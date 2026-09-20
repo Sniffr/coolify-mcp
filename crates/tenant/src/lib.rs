@@ -4,7 +4,9 @@ mod crypto;
 mod model;
 mod store;
 
-pub use model::{ConnectionMetadata, DecryptedConnection, TenantGrant, UserId, UserRecord};
+pub use model::{
+    ConnectionMetadata, DecryptedConnection, SessionRecord, TenantGrant, UserId, UserRecord,
+};
 pub use store::TenantStore;
 
 use thiserror::Error;

@@ -96,6 +96,44 @@ impl EncryptionKey {
         Ok(token)
     }
 
+    pub(crate) fn encrypt_blob(
+        &self,
+        label: &str,
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, TenantError> {
+        let cipher = Aes256Gcm::new_from_slice(&self.key).map_err(|_| TenantError::Crypto)?;
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let ciphertext = cipher
+            .encrypt(
+                &nonce,
+                Payload {
+                    msg: plaintext,
+                    aad: label.as_bytes(),
+                },
+            )
+            .map_err(|_| TenantError::Crypto)?;
+        let mut stored = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+        stored.extend_from_slice(nonce.as_slice());
+        stored.extend_from_slice(&ciphertext);
+        Ok(stored)
+    }
+
+    pub(crate) fn decrypt_blob(&self, label: &str, stored: &[u8]) -> Result<Vec<u8>, TenantError> {
+        if stored.len() <= NONCE_LEN {
+            return Err(TenantError::Decryption);
+        }
+        let cipher = Aes256Gcm::new_from_slice(&self.key).map_err(|_| TenantError::Decryption)?;
+        cipher
+            .decrypt(
+                Nonce::from_slice(&stored[..NONCE_LEN]),
+                Payload {
+                    msg: &stored[NONCE_LEN..],
+                    aad: label.as_bytes(),
+                },
+            )
+            .map_err(|_| TenantError::Decryption)
+    }
+
     pub(crate) fn associated_data(user_id: UserId) -> String {
         format!("{user_id}:coolify-default")
     }
