@@ -350,7 +350,18 @@ async fn github_start(
         return auth_failure();
     };
     cleanup_browser(&s);
-    if !s.browser.lock().unwrap().pending.contains_key(&query.state) {
+    let pending_exists = if let Some(store) = tenant_store(&s) {
+        match store.load_session(&query.state, "pending") {
+            Ok(Some(record)) => {
+                serde_json::from_slice::<PendingAuthorizationRecord>(&record.payload).is_ok()
+            }
+            Ok(None) => false,
+            Err(_) => return persistence_unavailable(),
+        }
+    } else {
+        s.browser.lock().unwrap().pending.contains_key(&query.state)
+    };
+    if !pending_exists {
         return auth_failure();
     }
     let github_state = uuid::Uuid::new_v4().to_string();
@@ -925,7 +936,11 @@ async fn authorize(
     };
     if s.config.hosted_auth.is_some() {
         if let Some(user_id) = browser_user(&s, &headers) {
-            return authorization_redirect(&s, s.config.oauth.authorize_for_user(req, user_id));
+            match s.config.oauth.authorize_for_user(req.clone(), user_id) {
+                Ok(authorization) => return authorization_redirect(&s, Ok(authorization)),
+                Err(error) if is_state_error(&error) => {}
+                Err(error) => return authorization_redirect(&s, Err(error)),
+            }
         }
 
         let service_state = match s
@@ -969,6 +984,14 @@ async fn authorize(
     }
 
     authorization_redirect(&s, s.config.oauth.authorize(req))
+}
+
+fn is_state_error(error: &OAuthError) -> bool {
+    matches!(
+        error,
+        OAuthError::InvalidRequest(message)
+            if message.to_ascii_lowercase().contains("state")
+    )
 }
 
 fn authorization_redirect(

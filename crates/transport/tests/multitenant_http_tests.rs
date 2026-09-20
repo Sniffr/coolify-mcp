@@ -127,7 +127,7 @@ async fn github_callback_resumes_original_redirect_and_pkce_transaction() {
         tenant: tenants.clone(),
         github: github_provider,
     }));
-    let app = router(config);
+    let app = router(config.clone());
 
     // A normal MCP client supplies its own opaque OAuth state. The service
     // must authenticate its internal continuation state without requiring a
@@ -168,7 +168,10 @@ async fn github_callback_resumes_original_redirect_and_pkce_transaction() {
     assert_eq!(start_location.path(), "/auth/github/start");
     assert_eq!(start_location.query_pairs().next().unwrap().0, "state");
 
-    let start_response = app
+    // Simulate a restart: the in-memory pending map is empty, but the durable
+    // tenant session must still allow github_start to resume the transaction.
+    let restarted_app = router(config);
+    let start_response = restarted_app
         .clone()
         .oneshot(
             Request::builder()
@@ -251,6 +254,62 @@ async fn github_callback_resumes_original_redirect_and_pkce_transaction() {
         .unwrap()
         .1
         .to_string();
+
+    // A browser retry sends a fresh opaque client state while retaining the
+    // authenticated browser session. It must start a new hosted transaction,
+    // rather than treating that state as a signed service state.
+    let session_cookie = callback_response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .find_map(|value| {
+            let value = value.to_str().ok()?;
+            value
+                .strip_prefix("mcp_session=")
+                .and_then(|cookie| cookie.split(';').next())
+                .map(|cookie| format!("mcp_session={cookie}"))
+        })
+        .unwrap();
+    let (retry_request, _) = pkce_request(&client.client_id, "retry-client-state".into());
+    let mut retry_url = Url::parse("https://example.test/oauth/authorize").unwrap();
+    retry_url
+        .query_pairs_mut()
+        .append_pair("client_id", &retry_request.client_id)
+        .append_pair("redirect_uri", &retry_request.redirect_uri)
+        .append_pair("response_type", &retry_request.response_type)
+        .append_pair("resource", &retry_request.resource)
+        .append_pair("scope", &retry_request.scope)
+        .append_pair("state", &retry_request.state)
+        .append_pair("code_challenge", &retry_request.code_challenge)
+        .append_pair(
+            "code_challenge_method",
+            &retry_request.code_challenge_method,
+        );
+    let retry_response = restarted_app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(path_and_query(&retry_url))
+                .header("cookie", session_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retry_response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        Url::parse(
+            retry_response
+                .headers()
+                .get("location")
+                .unwrap()
+                .to_str()
+                .unwrap()
+        )
+        .unwrap()
+        .path(),
+        "/auth/github/start"
+    );
 
     let user = tenants.get_user_by_github_id("1001").unwrap().unwrap();
     let token = oauth
