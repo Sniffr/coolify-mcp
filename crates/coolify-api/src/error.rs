@@ -2,6 +2,13 @@ use std::fmt;
 
 pub const MAX_BODY_BYTES: usize = 10_000;
 
+/// Bound for successful JSON response bodies. List endpoints return full
+/// Coolify objects (a single application can exceed 10 KiB of settings and
+/// environment metadata), so the success path allows up to 1 MiB. Error and
+/// probe bodies stay at [`MAX_BODY_BYTES`]; tool outputs are still projected
+/// down to small summaries before reaching the model.
+pub const MAX_JSON_BODY_BYTES: usize = 1_000_000;
+
 #[derive(Clone)]
 pub struct HttpErrorDetails {
     pub status: u16,

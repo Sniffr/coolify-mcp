@@ -1,5 +1,7 @@
 use crate::network_policy::resolve_hosted_base_url;
-use crate::{CoolifyApiError, CoolifyConfig, HttpErrorDetails, MAX_BODY_BYTES};
+use crate::{
+    CoolifyApiError, CoolifyConfig, HttpErrorDetails, MAX_BODY_BYTES, MAX_JSON_BODY_BYTES,
+};
 use reqwest::{
     Client, Method,
     header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
@@ -102,11 +104,11 @@ impl CoolifyClient {
         body: Option<Value>,
     ) -> Result<Value, CoolifyApiError> {
         let response = self.send(method, path, body).await?;
-        let bytes = read_bounded(response)
+        let bytes = read_bounded(response, MAX_JSON_BODY_BYTES)
             .await
-            .map_err(|e| CoolifyApiError::Decode(e.to_string()))?;
-        let value: Value =
-            serde_json::from_slice(&bytes).map_err(|e| CoolifyApiError::Decode(e.to_string()))?;
+            .map_err(|e| CoolifyApiError::Decode(format!("{path}: {e}")))?;
+        let value: Value = serde_json::from_slice(&bytes)
+            .map_err(|e| CoolifyApiError::Decode(format!("{path}: {e}")))?;
         Ok(safety::sanitize_json(&value, false))
     }
 
@@ -128,7 +130,7 @@ impl CoolifyClient {
                 "{path}: response was not JSON"
             )));
         }
-        let bytes = read_bounded(response)
+        let bytes = read_bounded(response, MAX_JSON_BODY_BYTES)
             .await
             .map_err(|e| CoolifyApiError::Decode(format!("{path}: {e}")))?;
         let value: Value = serde_json::from_slice(&bytes)
@@ -165,7 +167,7 @@ impl CoolifyClient {
         method: Method,
         path: &str,
     ) -> Result<String, CoolifyApiError> {
-        let bytes = read_bounded(self.send(method, path, None).await?)
+        let bytes = read_bounded(self.send(method, path, None).await?, MAX_BODY_BYTES)
             .await
             .map_err(|e| CoolifyApiError::Transport(e.to_string()))?;
         Ok(sanitize_text(&String::from_utf8_lossy(&bytes)))
@@ -304,7 +306,9 @@ impl CoolifyClient {
             .get("retry-after")
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
-        let body = read_bounded(response).await.unwrap_or_default();
+        let body = read_bounded(response, MAX_BODY_BYTES)
+            .await
+            .unwrap_or_default();
         let body = String::from_utf8_lossy(&body).into_owned();
         Err(CoolifyApiError::http_at_path(
             HttpErrorDetails::new(status, body, retry_after).redact_token(&token),
@@ -313,12 +317,15 @@ impl CoolifyClient {
     }
 }
 
-async fn read_bounded(mut response: reqwest::Response) -> Result<Vec<u8>, reqwest::Error> {
+async fn read_bounded(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>, reqwest::Error> {
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await? {
-        let remaining = MAX_BODY_BYTES.saturating_sub(bytes.len());
+        let remaining = limit.saturating_sub(bytes.len());
         bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
-        if bytes.len() == MAX_BODY_BYTES {
+        if bytes.len() == limit {
             break;
         }
     }

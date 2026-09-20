@@ -110,6 +110,35 @@ fn application_list_accepts_pagination_envelopes_and_id_fallback() {
 }
 
 #[tokio::test]
+async fn application_list_accepts_bodies_larger_than_error_bound() {
+    // A single Coolify application object can exceed the 10 KiB error-body
+    // bound; the success path must not truncate it mid-string.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
+        let big_name = "w".repeat(20_000);
+        let body = format!(r#"[{{"uuid":"a","name":"{big_name}"}}]"#);
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+    });
+    let mut env = HashMap::new();
+    env.insert("COOLIFY_BASE_URL".into(), format!("http://{addr}"));
+    env.insert("COOLIFY_ACCESS_TOKEN".into(), "token".into());
+    let client = CoolifyClient::new(config_from_env(&env, false).unwrap()).unwrap();
+    let apps = client.list_applications(1, 50).await.unwrap();
+    assert_eq!(apps.len(), 1);
+    assert_eq!(apps[0].name.len(), 20_000);
+}
+
+#[tokio::test]
 async fn application_list_accepts_data_envelope_over_http() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();

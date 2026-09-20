@@ -176,7 +176,7 @@ async fn client_bounds_multibyte_text_response() {
 
     let body = format!(
         r#"{{"data":"{}"}}"#,
-        "a".repeat(coolify_api::MAX_BODY_BYTES)
+        "a".repeat(coolify_api::MAX_JSON_BODY_BYTES)
     );
     let (url, handle) = server(200, "application/json", &body, "");
     let error = client_for(&url, "token", HeaderMap::new())
