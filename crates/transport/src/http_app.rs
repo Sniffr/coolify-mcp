@@ -200,6 +200,14 @@ pub fn router_with_app<A: McpApplication + 'static>(config: HttpConfig, app: A) 
         browser: Arc::new(Mutex::new(BrowserState::default())),
         audit,
     };
+    if let Some(hosted) = state.config.hosted_auth.as_ref()
+        && hosted.tenant.purge_expired_sessions().is_err()
+    {
+        state
+            .config
+            .persistence_health
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
     let request_timeout = state.config.request_timeout;
     Router::new()
         .route("/healthz", get(health))
@@ -1399,6 +1407,19 @@ async fn mcp(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Resp
         id
     } else {
         cleanup_sessions(&s);
+        if let Some(store) = tenant_store(&s) {
+            match store.count_sessions("mcp") {
+                Ok(count) if count >= s.config.max_sessions => {
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(json!({"error":"MCP session capacity reached"})),
+                    )
+                        .into_response();
+                }
+                Err(_) => return persistence_unavailable(),
+                _ => {}
+            }
+        }
         let mut sessions = s.sessions.lock().unwrap();
         if sessions.len() >= s.config.max_sessions {
             return (

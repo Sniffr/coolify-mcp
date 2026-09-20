@@ -456,6 +456,18 @@ impl TenantStore {
         Ok(())
     }
 
+    pub fn count_sessions(&self, kind: &str) -> Result<usize, TenantError> {
+        let connection = self.lock_connection()?;
+        let count = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE kind = ?1 AND expires_at >= ?2",
+                params![kind, unix_timestamp()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|_| TenantError::Storage)?;
+        usize::try_from(count).map_err(|_| TenantError::CorruptData)
+    }
+
     fn lock_connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, TenantError> {
         self.connection.lock().map_err(|_| TenantError::Storage)
     }
