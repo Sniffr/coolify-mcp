@@ -11,6 +11,7 @@ members = [
     "crates/transport",
     "crates/mcp-tools",
     "crates/doctor",
+    "crates/tenant",
 ]
 
 [dependencies]
