@@ -46,6 +46,30 @@ For full OAuth app, client, lifecycle, troubleshooting, and rollback instruction
 
 `remote-check.sh` checks the routed health endpoint and OAuth discovery without sending credentials. It rejects credential-like response content. For a failed rollout, stop the new Compose service and restore the previous image and Caddyfile backup; preserve `/data` and do not revoke credentials.
 
+## Continuous delivery (GitHub Actions)
+
+`.github/workflows/hosted-deploy.yml` runs on every push to `main` (and manually via
+`workflow_dispatch`): `cargo fmt` + `cargo test` + `cargo clippy`, then a cached
+`linux/amd64` image build pushed to
+`ghcr.io/<owner>/coolify-mcp:multitenant` (plus a short-sha tag), then an SSH deploy
+that pulls, retags to `sniffr-coolify-mcp:multitenant`, recreates Compose, and runs
+`remote-check.sh`. No secrets ever enter image layers or logs.
+
+Required repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+| --- | --- |
+| `SSH_HOST` | `77.90.40.213` |
+| `SSH_USER` | `sidney` |
+| `SSH_PRIVATE_KEY` | Private key whose public half is in the remote `authorized_keys` |
+| `SSH_PORT` | Optional, defaults to `22` |
+
+Optional repository variables: `REMOTE_APP_DIR` (default `/home/sidney/coolify-mcp`),
+`REMOTE_ENV_FILE` (default `/home/sidney/coolify-mcp/secrets/multitenant.env`),
+`BASE_URL` (default `https://mcp.social.dpdns.org`). Until the SSH secrets exist, the
+`deploy` job skips gracefully and CI still verifies and publishes the image; keep using
+the manual `docker save` flow below in that window.
+
 ## Local fallback
 
 Keep `compose.rust.yaml` for local fixture behavior only. Local clients can use Rust stdio or `python3 coolify_mcp_server.py` with local `COOLIFY_URL`/`COOLIFY_TOKEN` environment variables. These local credentials are never part of hosted Compose.
