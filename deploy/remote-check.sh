@@ -42,7 +42,12 @@ fi
 # and assert that the mcp container has no published host port.
 if command -v docker >/dev/null 2>&1 && [[ -f deploy/multitenant-compose.yaml ]]; then
   docker compose -f deploy/multitenant-compose.yaml config --quiet
-  published="$(docker inspect --format '{{json .NetworkSettings.Ports}}' mcp 2>/dev/null || true)"
+  container_id="$(docker compose -f deploy/multitenant-compose.yaml ps -q mcp 2>/dev/null || true)"
+  if [[ -z "$container_id" ]]; then
+    echo "FAIL mcp: Compose service container is not running" >&2
+    exit 1
+  fi
+  published="$(docker inspect --format '{{json .NetworkSettings.Ports}}' "$container_id")"
   if [[ -n "$published" && "$published" != "null" && "$published" != "{}" ]]; then
     echo "FAIL mcp: production service must not publish a host port" >&2
     exit 1
