@@ -62,6 +62,7 @@ impl RateLimiter {
 #[derive(Clone)]
 struct PendingAuthorization {
     request: AuthorizeRequest,
+    client_state: String,
     expires_at: Instant,
 }
 
@@ -404,8 +405,15 @@ async fn github_callback(
         Err(_) => return auth_failure(),
     };
     let client_id = pending.request.client_id.clone();
+    let client_state = pending.client_state;
     let authorization = match s.config.oauth.authorize_for_user(pending.request, user.id) {
-        Ok(authorization) => authorization,
+        Ok(mut authorization) => {
+            // The client-supplied OAuth state is opaque and must be returned
+            // unchanged. The signed service state is kept only server-side to
+            // authenticate/resume this transaction.
+            authorization.state = client_state;
+            authorization
+        }
         Err(_) => return auth_failure(),
     };
     if hosted
@@ -774,20 +782,27 @@ async fn authorize(
             return authorization_redirect(&s, s.config.oauth.authorize_for_user(req, user_id));
         }
 
-        if let Err(error) = s
+        let service_state = match s
             .config
             .oauth
             .create_state(&req.client_id, &req.redirect_uri)
         {
-            mark_persistence_error(&s, &error);
-            return oauth_error(error);
-        }
-        let mcp_state = req.state.clone();
+            Ok(state) => state,
+            Err(error) => {
+                mark_persistence_error(&s, &error);
+                return oauth_error(error);
+            }
+        };
+        let client_state = req.state.clone();
+        let mcp_state = service_state.clone();
+        let mut pending_request = req;
+        pending_request.state = service_state;
         cleanup_browser(&s);
         s.browser.lock().unwrap().pending.insert(
             mcp_state.clone(),
             PendingAuthorization {
-                request: req,
+                request: pending_request,
+                client_state,
                 expires_at: Instant::now() + s.config.session_ttl.min(Duration::from_secs(600)),
             },
         );

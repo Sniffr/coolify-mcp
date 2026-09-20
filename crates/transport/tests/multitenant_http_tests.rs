@@ -129,28 +129,10 @@ async fn github_callback_resumes_original_redirect_and_pkce_transaction() {
     }));
     let app = router(config);
 
-    let state_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/oauth/state")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({"client_id":client.client_id,"redirect_uri":"https://client.test/callback"}).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(state_response.status(), StatusCode::OK);
-    let state_body = axum::body::to_bytes(state_response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let mcp_state = serde_json::from_slice::<serde_json::Value>(&state_body).unwrap()["state"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    // A normal MCP client supplies its own opaque OAuth state. The service
+    // must authenticate its internal continuation state without requiring a
+    // non-standard preflight call to /oauth/state.
+    let mcp_state = "client-opaque-state".to_owned();
     let (request, verifier) = pkce_request(&client.client_id, mcp_state.clone());
     let mut authorize_url = Url::parse("https://example.test/oauth/authorize").unwrap();
     authorize_url
