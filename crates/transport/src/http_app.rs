@@ -582,9 +582,12 @@ fn settings_delete_inner(s: &AppState, user_id: UserId) -> Response {
     let Some(hosted) = &s.config.hosted_auth else {
         return settings_error(StatusCode::SERVICE_UNAVAILABLE);
     };
-    if hosted.tenant.delete_connection(user_id).is_err()
-        || hosted.tenant.revoke_user_grants(user_id).is_err()
+    // Revoke bearer grants before deleting the connection. If deletion fails,
+    // the connection remains usable only after a fresh authorization, rather
+    // than leaving already-issued MCP tokens active.
+    if hosted.tenant.revoke_user_grants(user_id).is_err()
         || s.config.oauth.revoke_user(user_id).is_err()
+        || hosted.tenant.delete_connection(user_id).is_err()
     {
         return settings_error(StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -624,10 +627,18 @@ async fn settings_logout(State(s): State<AppState>, headers: HeaderMap, body: By
     if !csrf_valid(&headers, &expected_csrf, supplied.as_deref()) {
         return settings_error(StatusCode::FORBIDDEN);
     }
+    if let Some(hosted) = &s.config.hosted_auth {
+        // Logout is a security boundary: invalidate bearer grants as well as
+        // the browser cookie so another client cannot continue the session.
+        if hosted.tenant.revoke_user_grants(user_id).is_err()
+            || s.config.oauth.revoke_user(user_id).is_err()
+        {
+            return settings_error(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
     if let Some(session) = cookie(&headers, "mcp_session") {
         s.browser.lock().unwrap().sessions.remove(&session);
     }
-    let _ = user_id;
     let mut response = Json(json!({"logged_out":true})).into_response();
     response
         .headers_mut()
