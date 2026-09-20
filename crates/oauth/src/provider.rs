@@ -60,6 +60,9 @@ impl OAuthProvider {
     ) -> Result<Self, OAuthError> {
         let resource = format!("{}{}", issuer, resource_path);
         let store = OAuthStateStore::load(&path).map_err(|_| OAuthError::Persistence)?;
+        if store.degraded() && path != std::path::Path::new("/dev/null") {
+            return Err(OAuthError::Persistence);
+        }
         let state_key = load_or_create_state_key(&path)?;
         Ok(Self {
             issuer,

@@ -1,6 +1,7 @@
 use identity::GitHubIdentityProvider;
 use oauth::OAuthProvider;
 use std::{
+    collections::HashMap,
     net::SocketAddr,
     path::PathBuf,
     sync::{
@@ -23,6 +24,37 @@ pub enum UrlError {
 }
 pub fn normalize_public_url(raw: &str) -> Result<Url, UrlError> {
     normalize_public_url_with_insecure(raw, false)
+}
+
+/// Validate the complete hosted startup contract without including secret values
+/// in errors. Stdio intentionally does not use this validation path.
+pub fn validate_hosted_environment(env: &HashMap<String, String>) -> Result<(), String> {
+    for name in [
+        "MCP_PUBLIC_URL",
+        "MCP_DATABASE_PATH",
+        "MCP_CONNECTION_ENCRYPTION_KEY",
+        "GITHUB_CLIENT_ID",
+        "GITHUB_CLIENT_SECRET",
+        "GITHUB_CALLBACK_URL",
+    ] {
+        if env.get(name).is_none_or(|value| value.trim().is_empty()) {
+            return Err(format!("{name} is required in HTTP mode"));
+        }
+    }
+
+    let public_url = normalize_public_url(env.get("MCP_PUBLIC_URL").expect("checked above"))
+        .map_err(|_| "invalid MCP_PUBLIC_URL".to_owned())?;
+    let callback = Url::parse(env.get("GITHUB_CALLBACK_URL").expect("checked above"))
+        .map_err(|_| "invalid GITHUB_CALLBACK_URL".to_owned())?;
+    if callback.scheme() != "https"
+        || callback.host_str().is_none()
+        || callback.query().is_some()
+        || callback.fragment().is_some()
+        || callback.as_str() != format!("{}/auth/github/callback", public_base(&public_url))
+    {
+        return Err("GITHUB_CALLBACK_URL must be the service HTTPS callback".to_owned());
+    }
+    Ok(())
 }
 
 /// Base public URL without a trailing slash, so endpoint concatenation never

@@ -11,6 +11,33 @@ struct Application {
     context: Option<ToolContext>,
     tools: Vec<mcp_tools::ToolSpec>,
 }
+
+fn ensure_private_parent(path: &std::path::Path) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "persistence path has no parent".to_owned())?;
+    let existed = parent.exists();
+    std::fs::create_dir_all(parent).map_err(|_| "persistence directory unavailable".to_owned())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(parent)
+            .map_err(|_| "persistence directory unavailable".to_owned())?
+            .permissions()
+            .mode()
+            & 0o777;
+        if existed && mode != 0o700 {
+            return Err("persistence directory permissions are unsafe".to_owned());
+        }
+        if !existed {
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+                .map_err(|_| "persistence directory unavailable".to_owned())?;
+        }
+    }
+    Ok(())
+}
+
 impl Application {
     fn error(message: &'static str) -> ToolResult {
         ToolResult {
@@ -60,9 +87,10 @@ fn print_doctor_report(report: &doctor::DoctorReport, json: bool) {
 }
 
 async fn run_hosted_http(env: &HashMap<String, String>) -> Result<(), String> {
+    transport::validate_hosted_environment(env)?;
     let raw_public_url = env
         .get("MCP_PUBLIC_URL")
-        .ok_or_else(|| "MCP_PUBLIC_URL is required in HTTP mode".to_owned())?;
+        .expect("hosted environment was validated");
     let public_url = transport::normalize_public_url_with_insecure(
         raw_public_url,
         env.get("MCP_ALLOW_INSECURE_HTTP")
@@ -76,9 +104,9 @@ async fn run_hosted_http(env: &HashMap<String, String>) -> Result<(), String> {
         .ok_or_else(|| "MCP_CONNECTION_ENCRYPTION_KEY is required in HTTP mode".to_owned())?;
     let database_path = std::path::PathBuf::from(
         env.get("MCP_DATABASE_PATH")
-            .cloned()
-            .unwrap_or_else(|| "/data/tenant.sqlite".into()),
+            .expect("hosted environment was validated"),
     );
+    ensure_private_parent(&database_path)?;
     let tenants = Arc::new(
         tenant::TenantStore::open(&database_path, encryption_key)
             .map_err(|_| "tenant persistence unavailable".to_owned())?,
@@ -134,6 +162,17 @@ async fn run_hosted_http(env: &HashMap<String, String>) -> Result<(), String> {
             .cloned()
             .unwrap_or_else(|| "/data/oauth-state.json".into()),
     );
+    ensure_private_parent(&state_path)?;
+    let audit_path = env
+        .get("MCP_AUDIT_LOG")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            state_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("audit.jsonl")
+        });
+    ensure_private_parent(&audit_path)?;
     let oauth = Arc::new(
         oauth::OAuthProvider::with_store(
             transport::public_base(&public_url),
@@ -175,15 +214,7 @@ async fn run_hosted_http(env: &HashMap<String, String>) -> Result<(), String> {
             && env
                 .get("MCP_ALLOW_INSECURE_HTTP")
                 .is_some_and(|v| v.eq_ignore_ascii_case("true")),
-        audit_path: env
-            .get("MCP_AUDIT_LOG")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                state_path
-                    .parent()
-                    .unwrap_or_else(|| std::path::Path::new("."))
-                    .join("audit.jsonl")
-            }),
+        audit_path,
     };
     transport::run_http(app, config)
         .await
@@ -209,11 +240,13 @@ async fn main() {
             .get("MCP_CONNECTION_ENCRYPTION_KEY")
             .filter(|value| !value.trim().is_empty())
             .is_some_and(|key| {
-                let path = std::path::PathBuf::from(
-                    env.get("MCP_DATABASE_PATH")
-                        .cloned()
-                        .unwrap_or_else(|| "/data/tenant.sqlite".into()),
-                );
+                let Some(database) = env
+                    .get("MCP_DATABASE_PATH")
+                    .filter(|value| !value.trim().is_empty())
+                else {
+                    return false;
+                };
+                let path = std::path::PathBuf::from(database);
                 tenant::TenantStore::open(&path, key).is_ok()
             });
         let report = doctor::run_hosted_doctor(&env, tenant_ready);

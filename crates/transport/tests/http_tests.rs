@@ -2,11 +2,71 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use std::net::SocketAddr;
+use std::{collections::HashMap, net::SocketAddr};
 use tower::{Service, ServiceExt};
-use transport::http::{DRAIN_TIMEOUT, HTTP2_SUPPORTED, HttpConfig, normalize_public_url};
+use transport::http::{
+    DRAIN_TIMEOUT, HTTP2_SUPPORTED, HttpConfig, normalize_public_url, validate_hosted_environment,
+};
 use transport::http_app::{router, router_with_app};
 const _: () = assert!(!HTTP2_SUPPORTED);
+
+fn hosted_env() -> HashMap<String, String> {
+    HashMap::from([
+        ("MCP_PUBLIC_URL".into(), "https://mcp.example.test".into()),
+        ("MCP_DATABASE_PATH".into(), "/data/tenant.sqlite".into()),
+        (
+            "MCP_CONNECTION_ENCRYPTION_KEY".into(),
+            "fixture-encryption-key".into(),
+        ),
+        ("GITHUB_CLIENT_ID".into(), "fixture-client-id".into()),
+        (
+            "GITHUB_CLIENT_SECRET".into(),
+            "fixture-client-secret".into(),
+        ),
+        (
+            "GITHUB_CALLBACK_URL".into(),
+            "https://mcp.example.test/auth/github/callback".into(),
+        ),
+    ])
+}
+
+#[test]
+fn hosted_configuration_requires_every_persistence_and_identity_variable() {
+    let required = [
+        "MCP_PUBLIC_URL",
+        "MCP_DATABASE_PATH",
+        "MCP_CONNECTION_ENCRYPTION_KEY",
+        "GITHUB_CLIENT_ID",
+        "GITHUB_CLIENT_SECRET",
+        "GITHUB_CALLBACK_URL",
+    ];
+    for variable in required {
+        let mut env = hosted_env();
+        env.remove(variable);
+        assert!(
+            validate_hosted_environment(&env).is_err(),
+            "{variable} must be required"
+        );
+    }
+}
+
+#[test]
+fn hosted_configuration_does_not_require_global_coolify_credentials() {
+    let env = hosted_env();
+    assert!(validate_hosted_environment(&env).is_ok());
+}
+
+#[test]
+fn hosted_callback_must_match_public_url_without_leaking_values() {
+    let mut env = hosted_env();
+    env.insert(
+        "GITHUB_CALLBACK_URL".into(),
+        "https://other.example/callback".into(),
+    );
+    let error = validate_hosted_environment(&env).unwrap_err().to_string();
+    assert!(error.contains("GITHUB_CALLBACK_URL"));
+    assert!(!error.contains("other.example"));
+}
 
 struct TestApp;
 impl mcp_tools::McpApplication for TestApp {
