@@ -1,5 +1,7 @@
-//! Hosted egress policy. A hosted tenant may only target public HTTPS Coolify
-//! endpoints; local stdio clients intentionally retain the legacy `new` path.
+//! Hosted egress policy. A hosted tenant may only target public Coolify
+//! endpoints; plain `http://` is accepted for hosts without TLS, but the
+//! token then travels unencrypted and the settings UI warns accordingly.
+//! Local stdio clients intentionally retain the legacy `new` path.
 use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
 use url::Url;
 
@@ -11,8 +13,8 @@ pub fn validate_hosted_base_url(url: &Url) -> Result<(), String> {
 /// the HTTP client. Re-resolving the hostname when a request is sent would
 /// leave a DNS-rebinding window between policy validation and connection.
 pub(crate) fn resolve_hosted_base_url(url: &Url) -> Result<Vec<std::net::SocketAddr>, String> {
-    if url.scheme() != "https" {
-        return Err("hosted Coolify URLs must use HTTPS".into());
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("hosted Coolify URLs must use http or https".into());
     }
     let host = url
         .host_str()

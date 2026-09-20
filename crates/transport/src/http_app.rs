@@ -607,10 +607,16 @@ async fn settings_get(State(s): State<AppState>, headers: HeaderMap) -> Response
         .hosted_auth
         .as_ref()
         .and_then(|h| h.tenant.load_connection(user_id).ok().flatten());
-    let (host, profile) = connection
+    let (base_url_str, host, profile) = connection
         .as_ref()
-        .map(|c| (c.base_url.host_str().unwrap_or(""), Some(c.profile)))
-        .unwrap_or(("", None));
+        .map(|c| {
+            (
+                c.base_url.as_str(),
+                c.base_url.host_str().unwrap_or(""),
+                Some(c.profile),
+            )
+        })
+        .unwrap_or(("", "", None));
     if headers
         .get("accept")
         .and_then(|v| v.to_str().ok())
@@ -620,7 +626,7 @@ async fn settings_get(State(s): State<AppState>, headers: HeaderMap) -> Response
             json!({"host":host,"configured":!host.is_empty(),"profile":profile.map(profile_name).unwrap_or("read-only"),"last_validated_at":Value::Null,"setup_url":format!("{}/settings", crate::http::public_base(&s.config.public_url))}),
         );
     }
-    Html(settings_html(Some(host), profile, &csrf, None)).into_response()
+    Html(settings_html(Some(base_url_str), profile, &csrf, None)).into_response()
 }
 
 async fn settings_save(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
@@ -728,7 +734,7 @@ async fn settings_save(State(s): State<AppState>, headers: HeaderMap, body: Byte
         return settings_failure(
             &headers,
             &expected_csrf,
-            Some(base_url.host_str().unwrap_or("")),
+            Some(base_url.as_str()),
             Some(profile),
             StatusCode::BAD_REQUEST,
             "API token is empty or too long. Paste the token from your Coolify dashboard (user menu, API tokens) with no extra spaces.",
@@ -738,7 +744,7 @@ async fn settings_save(State(s): State<AppState>, headers: HeaderMap, body: Byte
         return settings_failure(
             &headers,
             &expected_csrf,
-            Some(base_url.host_str().unwrap_or("")),
+            Some(base_url.as_str()),
             Some(profile),
             StatusCode::SERVICE_UNAVAILABLE,
             "Hosted settings are unavailable on this server.",
@@ -754,7 +760,7 @@ async fn settings_save(State(s): State<AppState>, headers: HeaderMap, body: Byte
         return settings_failure(
             &headers,
             &expected_csrf,
-            Some(base_url.host_str().unwrap_or("")),
+            Some(base_url.as_str()),
             Some(profile),
             StatusCode::BAD_REQUEST,
             "API token was rejected. Paste it again with no extra spaces.",
@@ -772,7 +778,7 @@ async fn settings_save(State(s): State<AppState>, headers: HeaderMap, body: Byte
         return settings_failure(
             &headers,
             &expected_csrf,
-            Some(base_url.host_str().unwrap_or("")),
+            Some(base_url.as_str()),
             Some(profile),
             StatusCode::BAD_REQUEST,
             "Could not build a client for that URL. Check the hostname for typos.",
@@ -784,7 +790,7 @@ async fn settings_save(State(s): State<AppState>, headers: HeaderMap, body: Byte
             return settings_failure(
                 &headers,
                 &expected_csrf,
-                Some(base_url.host_str().unwrap_or("")),
+                Some(base_url.as_str()),
                 Some(profile),
                 StatusCode::BAD_GATEWAY,
                 &format!(
@@ -809,7 +815,7 @@ async fn settings_save(State(s): State<AppState>, headers: HeaderMap, body: Byte
         return settings_failure(
             &headers,
             &expected_csrf,
-            Some(base_url.host_str().unwrap_or("")),
+            Some(base_url.as_str()),
             Some(profile),
             StatusCode::BAD_GATEWAY,
             &message,
@@ -823,7 +829,7 @@ async fn settings_save(State(s): State<AppState>, headers: HeaderMap, body: Byte
         return settings_failure(
             &headers,
             &expected_csrf,
-            Some(base_url.host_str().unwrap_or("")),
+            Some(base_url.as_str()),
             Some(profile),
             StatusCode::BAD_REQUEST,
             "Could not store the connection. Reload /settings and try again.",
@@ -1414,7 +1420,7 @@ fn tenant_auth_message(s: &AppState) -> String {
 
 fn tenant_setup_message(s: &AppState) -> String {
     format!(
-        "No Coolify connection saved for your GitHub user. Open {} in the same browser session you used for GitHub login and save Base URL (public https, no /api/v1 suffix) plus API token, then retry in Claude. Your token stays encrypted per-user and is never shared.",
+        "No Coolify connection saved for your GitHub user. Open {} in the same browser session you used for GitHub login and save Base URL (public URL, https preferred, no /api/v1 suffix) plus API token, then retry in Claude. Your token stays encrypted per-user and is never shared.",
         setup_url(s)
     )
 }
