@@ -45,6 +45,14 @@ fn hosted_policy_allows_public_https() {
 }
 
 #[test]
-fn hosted_policy_rejects_plain_http_without_local_escape_hatch() {
-    assert!(validate_hosted_base_url(&"http://example.com".parse().unwrap()).is_err());
+fn hosted_policy_allows_plain_http_to_public_addresses_with_warning() {
+    // Plain http is accepted for hosts without TLS (the settings UI warns the
+    // token travels unencrypted); DNS pinning and the public-address check
+    // still apply. Use literals so this test needs no external DNS.
+    let url = "http://1.1.1.1:8000".parse().unwrap();
+    assert!(validate_hosted_base_url(&url).is_ok());
+    assert!(CoolifyClient::new_hosted(config("http://1.1.1.1:8000")).is_ok());
+    // Private/local destinations stay rejected over http too.
+    assert!(validate_hosted_base_url(&"http://192.168.1.1".parse().unwrap()).is_err());
+    assert!(CoolifyClient::new_hosted(config("http://127.0.0.1")).is_err());
 }
