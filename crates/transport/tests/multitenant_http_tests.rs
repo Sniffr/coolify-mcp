@@ -725,6 +725,57 @@ async fn settings_html_and_json_never_echo_token() {
 }
 
 #[tokio::test]
+async fn settings_save_without_session_explains_same_browser_requirement() {
+    let config = HttpConfig::for_tests();
+    let app = router(config);
+    let form = "base_url=https%3A%2F%2Fcoolify.example.com&access_token=secret-token&profile=read-only&csrf=x";
+
+    // API clients get a specific JSON error, never the old generic rejection.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/settings/coolify")
+                .method("POST")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("accept", "application/json")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let message = value["error"].as_str().unwrap();
+    assert!(message.contains("same browser"), "unexpected: {message}");
+    assert!(!message.contains("secret-token"));
+    assert!(!body.windows(form.len()).any(|w| w == form.as_bytes()));
+
+    // Browser form posts get the styled page with the same guidance.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/settings/coolify")
+                .method("POST")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = axum::body::to_bytes(response.into_body(), 256 * 1024)
+        .await
+        .unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("same browser"), "missing guidance in HTML");
+    assert!(!html.contains("secret-token"), "token echoed into HTML");
+}
+
+#[tokio::test]
 async fn user_profile_cannot_be_elevated_by_tool_arguments() {
     let (fixture, base_url, fixture_task) = start_fixture().await;
     let directory = private_tempdir();

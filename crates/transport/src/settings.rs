@@ -18,25 +18,71 @@ pub(crate) fn profile_name(profile: CapabilityProfile) -> &'static str {
     }
 }
 
-pub(crate) fn validate_base_url(raw: &str, allow_insecure_local_targets: bool) -> Result<Url, ()> {
-    let mut url = Url::parse(raw.trim()).map_err(|_| ())?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(());
+/// Validate a user-supplied Coolify base URL, normalizing common copy-paste
+/// mistakes. Returns a short human-readable reason (safe to show the user;
+/// never includes secrets) on failure.
+pub(crate) fn validate_base_url(
+    raw: &str,
+    allow_insecure_local_targets: bool,
+) -> Result<Url, &'static str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Base URL is empty. Example: https://coolify.example.com");
     }
-    while url.path().ends_with('/') && url.path() != "/" {
-        let path = url.path().trim_end_matches('/').to_owned();
-        url.set_path(&path);
+    let mut url = Url::parse(trimmed)
+        .map_err(|_| "Base URL is not a valid URL. Example: https://coolify.example.com")?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("Base URL must start with https://. Example: https://coolify.example.com");
     }
+    if url.host_str().is_none() {
+        return Err("Base URL has no host. Example: https://coolify.example.com");
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("Base URL must not contain credentials. Example: https://coolify.example.com");
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(
+            "Base URL must not contain ?query or #fragment. Example: https://coolify.example.com",
+        );
+    }
+    // Strip a mistakenly pasted API suffix: the client appends /api/v1 itself.
+    let mut path = url.path().to_owned();
+    while path.ends_with('/') && path != "/" {
+        path = path.trim_end_matches('/').to_owned();
+    }
+    if path.eq_ignore_ascii_case("/api/v1") || path.to_ascii_lowercase().starts_with("/api/v1/") {
+        let stripped = path["/api/v1".len()..].to_owned();
+        path = if stripped.is_empty() {
+            "/".to_owned()
+        } else {
+            stripped
+        };
+        while path.ends_with('/') && path != "/" {
+            path = path.trim_end_matches('/').to_owned();
+        }
+    }
+    if path != "/" {
+        return Err(
+            "Base URL must be the server root with no path. Example: https://coolify.example.com (not https://coolify.example.com/api/v1)",
+        );
+    }
+    url.set_path("/");
     // This escape hatch exists only for debug/test local acceptance. Release
     // hosted builds never enable it; production must validate public HTTPS.
-    if !allow_insecure_local_targets && coolify_api::validate_hosted_base_url(&url).is_err() {
-        return Err(());
+    if !allow_insecure_local_targets
+        && let Err(reason) = coolify_api::validate_hosted_base_url(&url)
+    {
+        if reason.contains("HTTPS") {
+            return Err("Hosted Coolify URLs must use https:// (plain http is rejected).");
+        }
+        if reason.contains("resolv") || reason.contains("address") {
+            return Err(
+                "That host could not be resolved to a public address. Check the hostname for typos; private, local, and reserved addresses are rejected.",
+            );
+        }
+        return Err(
+            "That destination is rejected by the hosted egress policy (public https only).",
+        );
     }
     Ok(url)
 }
@@ -54,11 +100,13 @@ pub(crate) fn settings_html(
     host: Option<&str>,
     profile: Option<CapabilityProfile>,
     csrf: &str,
+    error: Option<&str>,
 ) -> String {
     let host = host.map(html_escape).unwrap_or_default();
     let profile = profile.map(profile_name).unwrap_or("read-only");
     let configured = !host.is_empty();
     let csrf_esc = html_escape(csrf);
+    let error_banner = error.map(html_escape).unwrap_or_default();
 
     let (pill_class, pill_dot, pill_text) = if configured {
         ("pill ok", "<span class=dot></span>", "Connected")
@@ -85,7 +133,12 @@ pub(crate) fn settings_html(
     let url_hint = if configured {
         String::new()
     } else {
-        r#"<p class=hint id=urlHint aria-live=polite>Example: <code>https://coolify.example.com</code></p>"#.to_owned()
+        r#"<p class=hint id=urlHint aria-live=polite>Example: <code>https://coolify.example.com</code></p><details class=examples><summary>Valid and invalid examples</summary><ul><li><code>https://coolify.example.com</code> — good.</li><li><code>https://coolify.example.com/api/v1</code> — remove <code>/api/v1</code>, it is added automatically.</li><li><code>http://coolify.example.com</code> — must be <code>https://</code> on hosted.</li><li><code>coolify.example.com</code> — missing <code>https://</code> prefix.</li></ul></details>"#.to_owned()
+    };
+    let error_html = if error_banner.is_empty() {
+        String::new()
+    } else {
+        format!("<div class=error role=alert>{error_banner}</div>")
     };
 
     format!(
@@ -108,9 +161,9 @@ fieldset{{border:1px solid var(--line);border-radius:12px;margin:18px 0 0;paddin
 .row{{display:flex;gap:12px;flex-wrap:wrap;margin-top:20px}}button{{font:inherit;font-weight:700;border-radius:10px;padding:11px 18px;cursor:pointer;border:1px solid transparent}}
 .primary{{background:var(--signal);color:#fff}}.primary:hover{{background:var(--signal-deep)}}.ghost{{background:#fff;border-color:var(--line);color:var(--ink)}}
 .danger-zone{{margin-top:22px;border:1px dashed #f1b0aa;border-radius:var(--radius);padding:18px 22px;background:#fff5f4}}.danger-zone h2{{font-size:16px;margin:0 0 4px}}.danger-zone p{{color:var(--muted);font-size:14px;margin:0 0 10px}}.danger{{background:#fff;border-color:#d92d20;color:var(--bad)}}
-.meta{{margin-top:18px;font-size:13px;color:var(--muted)}}@media (max-width:520px){{.wrap{{padding:22px 14px 48px}}h1{{font-size:24px}}.panel{{padding:16px}}}}
+.meta{{margin-top:18px;font-size:13px;color:var(--muted)}}.error{{border:1px solid #f1b0aa;background:#fff5f4;color:var(--bad);border-radius:12px;padding:12px 14px;margin:0 0 14px;font-weight:600}}.examples{{margin:8px 0 0;font-size:13.5px;color:var(--muted)}}.examples summary{{cursor:pointer;font-weight:650}}.examples ul{{margin:8px 0 0;padding-left:20px;display:grid;gap:4px}}@media (max-width:520px){{.wrap{{padding:22px 14px 48px}}h1{{font-size:24px}}.panel{{padding:16px}}}}
 </style><div class=signalbar></div><div class=wrap><div class=top><svg width=22 height=22 viewBox='0 0 24 24' fill=none aria-hidden=true><rect x=3 y=3 width=18 height=14 rx=2.5 stroke='#0f1e2e' stroke-width=1.8 /><path d='M8 21h8M12 17v4' stroke='#0e9384' stroke-width=1.8 stroke-linecap=round /><circle cx=7.5 cy=9.5 r=1.4 fill='#0e9384' /><path d='M11 9.5h6M11 12.5h6' stroke='#0f1e2e' stroke-width=1.6 stroke-linecap=round /></svg><span>Hosted Coolify connection</span></div>
-<div class="{pill_class}">{pill_dot}{pill_text}</div><h1>{status_title}</h1><p class=sub>{status_sub}</p>{steps}<div class=panel>
+<div class="{pill_class}">{pill_dot}{pill_text}</div><h1>{status_title}</h1><p class=sub>{status_sub}</p>{steps}{error_html}<div class=panel>
 <form method=post action='/settings/coolify' id=saveForm><input type=hidden name=csrf value='{csrf_esc}'>
 <label class=field for=base_url>Coolify base URL</label><input id=base_url name=base_url type=url inputmode=url placeholder='https://coolify.example.com' value='{host}' required autocomplete=url>{url_hint}
 <label class=field for=access_token>API token</label><input id=access_token name=access_token type=password required autocomplete=off placeholder='Paste token — it is encrypted and never shown again'>
@@ -137,4 +190,32 @@ fieldset{{border:1px solid var(--line);border-radius:12px;margin:18px 0 0;paddin
         },
         admin = if profile == "admin" { " checked" } else { "" },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_base_url;
+
+    #[test]
+    fn strips_api_suffix_and_trims_whitespace() {
+        let url = validate_base_url("  https://127.0.0.1:8443/api/v1/  ", true).unwrap();
+        assert_eq!(url.as_str(), "https://127.0.0.1:8443/");
+    }
+
+    #[test]
+    fn rejects_non_root_paths_with_actionable_reason() {
+        let err = validate_base_url("https://127.0.0.1:8443/some/path", true).unwrap_err();
+        assert!(err.contains("/api/v1"), "unexpected reason: {err}");
+    }
+
+    #[test]
+    fn rejects_empty_and_schemeless_input_with_examples() {
+        for raw in ["", "   ", "coolify.example.com"] {
+            let err = validate_base_url(raw, true).unwrap_err();
+            assert!(
+                err.contains("https://coolify.example.com"),
+                "missing example in: {err}"
+            );
+        }
+    }
 }
