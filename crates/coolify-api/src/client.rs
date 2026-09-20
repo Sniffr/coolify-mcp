@@ -1,4 +1,4 @@
-use crate::network_policy::validate_hosted_base_url;
+use crate::network_policy::resolve_hosted_base_url;
 use crate::{CoolifyApiError, CoolifyConfig, HttpErrorDetails, MAX_BODY_BYTES};
 use reqwest::{
     Client, Method,
@@ -60,12 +60,23 @@ impl CoolifyClient {
         hosted: bool,
         allow_insecure_local_targets: bool,
     ) -> Result<Self, CoolifyApiError> {
-        if hosted && !allow_insecure_local_targets {
-            validate_hosted_base_url(&config.base_url).map_err(CoolifyApiError::Config)?;
-        }
-        let client = Client::builder()
+        let mut builder = Client::builder()
             .timeout(config.timeout)
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(reqwest::redirect::Policy::none());
+        if hosted && !allow_insecure_local_targets {
+            let addresses =
+                resolve_hosted_base_url(&config.base_url).map_err(CoolifyApiError::Config)?;
+            // Keep the validated DNS answer for the lifetime of this client;
+            // otherwise request-time resolution permits DNS rebinding.
+            builder = builder.resolve_to_addrs(
+                config
+                    .base_url
+                    .host_str()
+                    .ok_or_else(|| CoolifyApiError::Config("missing destination host".into()))?,
+                &addresses,
+            );
+        }
+        let client = builder
             .build()
             .map_err(|e| CoolifyApiError::Transport(e.to_string()))?;
         Ok(Self {
@@ -145,7 +156,6 @@ impl CoolifyClient {
     /// failures and timeouts are `Err`, with no secret values included.
     pub async fn probe_get(&self, path: &str) -> Result<ProbeOutcome, String> {
         use reqwest::header::{CONTENT_TYPE, LOCATION};
-        use std::time::Duration;
         let url = self
             .config
             .base_url
@@ -158,11 +168,6 @@ impl CoolifyClient {
             .token_source
             .current()
             .map_err(|_| "token unavailable".to_owned())?;
-        let probe = Client::builder()
-            .timeout(Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| e.to_string())?;
         let mut headers = HeaderMap::new();
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -176,7 +181,8 @@ impl CoolifyClient {
                 headers.insert(key.clone(), value.clone());
             }
         }
-        let response = probe
+        let response = self
+            .client
             .request(Method::GET, url)
             .headers(headers)
             .send()

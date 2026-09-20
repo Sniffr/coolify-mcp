@@ -4,6 +4,13 @@ use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
 use url::Url;
 
 pub fn validate_hosted_base_url(url: &Url) -> Result<(), String> {
+    resolve_hosted_base_url(url).map(|_| ())
+}
+
+/// Resolve and validate once, returning the addresses that must be pinned on
+/// the HTTP client. Re-resolving the hostname when a request is sent would
+/// leave a DNS-rebinding window between policy validation and connection.
+pub(crate) fn resolve_hosted_base_url(url: &Url) -> Result<Vec<std::net::SocketAddr>, String> {
     if url.scheme() != "https" {
         return Err("hosted Coolify URLs must use HTTPS".into());
     }
@@ -13,22 +20,20 @@ pub fn validate_hosted_base_url(url: &Url) -> Result<(), String> {
     let port = url
         .port_or_known_default()
         .ok_or_else(|| "missing destination port".to_owned())?;
-    let addresses = (host, port)
+    let addresses: Vec<_> = (host, port)
         .to_socket_addrs()
-        .map_err(|_| "destination host could not be resolved".to_owned())?;
-    let mut found = false;
-    for address in addresses {
-        found = true;
-        if !is_public_address(address.ip()) {
-            return Err(
-                "hosted Coolify destination resolves to a private or reserved address".into(),
-            );
-        }
-    }
-    if !found {
+        .map_err(|_| "destination host could not be resolved".to_owned())?
+        .collect();
+    if addresses.is_empty() {
         return Err("destination host has no addresses".into());
     }
-    Ok(())
+    if addresses
+        .iter()
+        .any(|address| !is_public_address(address.ip()))
+    {
+        return Err("hosted Coolify destination resolves to a private or reserved address".into());
+    }
+    Ok(addresses)
 }
 
 fn is_public_address(address: IpAddr) -> bool {
@@ -60,6 +65,7 @@ fn is_public_address(address: IpAddr) -> bool {
                 || ip.is_multicast()
                 || (segments[0] & 0xfe00) == 0xfc00 // ULA
                 || (segments[0] & 0xffc0) == 0xfe80 // link-local
+                || (segments[0] & 0xffc0) == 0xfec0 // deprecated site-local
                 || (segments[0] == 0x2001 && segments[1] == 0x0db8) // documentation
                 || (segments[0] == 0x2001 && segments[1] == 0x0002) // benchmarking
                 || (segments[0] == 0x2001 && segments[1] == 0x0010) // ORCHID
