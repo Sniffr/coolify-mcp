@@ -18,7 +18,7 @@ pub(crate) fn profile_name(profile: CapabilityProfile) -> &'static str {
     }
 }
 
-pub(crate) fn validate_base_url(raw: &str) -> Result<Url, ()> {
+pub(crate) fn validate_base_url(raw: &str, allow_insecure_local_targets: bool) -> Result<Url, ()> {
     let mut url = Url::parse(raw.trim()).map_err(|_| ())?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()
@@ -32,6 +32,11 @@ pub(crate) fn validate_base_url(raw: &str) -> Result<Url, ()> {
     while url.path().ends_with('/') && url.path() != "/" {
         let path = url.path().trim_end_matches('/').to_owned();
         url.set_path(&path);
+    }
+    // This escape hatch exists only for debug/test local acceptance. Release
+    // hosted builds never enable it; production must validate public HTTPS.
+    if !allow_insecure_local_targets && coolify_api::validate_hosted_base_url(&url).is_err() {
+        return Err(());
     }
     Ok(url)
 }

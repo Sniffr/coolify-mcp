@@ -76,6 +76,9 @@ pub struct HttpConfig {
     pub max_sessions: usize,
     pub session_ttl: Duration,
     pub trusted_proxy: bool,
+    /// Explicit debug/test-only escape hatch for local Coolify fixtures. The
+    /// release hosted binary ignores the corresponding environment setting.
+    pub allow_insecure_local_targets: bool,
     /// Append-only, mode-protected audit log for hosted tool calls.
     pub audit_path: PathBuf,
 }
@@ -95,6 +98,7 @@ impl HttpConfig {
             max_sessions: 1024,
             session_ttl: Duration::from_secs(3600),
             trusted_proxy: false,
+            allow_insecure_local_targets: true,
             audit_path: std::env::temp_dir()
                 .join(format!("coolify-mcp-audit-{}.jsonl", uuid::Uuid::new_v4())),
         }

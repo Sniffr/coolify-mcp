@@ -166,6 +166,15 @@ async fn run_hosted_http(env: &HashMap<String, String>) -> Result<(), String> {
         trusted_proxy: env
             .get("MCP_TRUSTED_PROXY")
             .is_some_and(|v| v.eq_ignore_ascii_case("true")),
+        // Deliberately debug-only and opt-in twice: this is for local test
+        // fixtures, never a production hosted deployment setting.
+        allow_insecure_local_targets: cfg!(debug_assertions)
+            && env
+                .get("MCP_HOSTED_INSECURE_LOCAL_TARGETS")
+                .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+            && env
+                .get("MCP_ALLOW_INSECURE_HTTP")
+                .is_some_and(|v| v.eq_ignore_ascii_case("true")),
         audit_path: env
             .get("MCP_AUDIT_LOG")
             .map(std::path::PathBuf::from)

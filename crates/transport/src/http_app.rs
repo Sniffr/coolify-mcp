@@ -527,7 +527,7 @@ async fn settings_save(State(s): State<AppState>, headers: HeaderMap, body: Byte
     let Some(profile) = parse_profile(&profile_raw) else {
         return settings_error(StatusCode::BAD_REQUEST);
     };
-    let Ok(base_url) = validate_base_url(&raw_url) else {
+    let Ok(base_url) = validate_base_url(&raw_url, s.config.allow_insecure_local_targets) else {
         return settings_error(StatusCode::BAD_REQUEST);
     };
     if token.is_empty() || token.len() > 4096 {
@@ -537,13 +537,6 @@ async fn settings_save(State(s): State<AppState>, headers: HeaderMap, body: Byte
         return settings_error(StatusCode::SERVICE_UNAVAILABLE);
     };
     let secret = secrecy::SecretString::from(token);
-    if hosted
-        .tenant
-        .save_connection(user_id, &base_url, &secret, profile)
-        .is_err()
-    {
-        return settings_error(StatusCode::BAD_REQUEST);
-    }
     let mut env = std::collections::HashMap::new();
     env.insert(
         "COOLIFY_ACCESS_TOKEN".to_owned(),
@@ -552,12 +545,15 @@ async fn settings_save(State(s): State<AppState>, headers: HeaderMap, body: Byte
     let Ok(token_source) = TokenSource::from_env(&env) else {
         return settings_error(StatusCode::BAD_REQUEST);
     };
-    let Ok(client) = CoolifyClient::new(CoolifyConfig {
-        base_url: base_url.clone(),
-        token_source,
-        custom_headers: Default::default(),
-        timeout: Duration::from_secs(10),
-    }) else {
+    let Ok(client) = CoolifyClient::new_hosted_with_local_escape(
+        CoolifyConfig {
+            base_url: base_url.clone(),
+            token_source,
+            custom_headers: Default::default(),
+            timeout: Duration::from_secs(10),
+        },
+        s.config.allow_insecure_local_targets,
+    ) else {
         return settings_error(StatusCode::BAD_REQUEST);
     };
     let Ok(probe) = client.probe_get("version").await else {
@@ -565,6 +561,13 @@ async fn settings_save(State(s): State<AppState>, headers: HeaderMap, body: Byte
     };
     if probe.status >= 400 {
         return settings_error(StatusCode::BAD_GATEWAY);
+    }
+    if hosted
+        .tenant
+        .save_connection(user_id, &base_url, &secret, profile)
+        .is_err()
+    {
+        return settings_error(StatusCode::BAD_REQUEST);
     }
     let value = json!({"host":base_url.host_str().unwrap_or(""),"configured":true,"profile":profile_name(profile),"last_validated_at":unix_timestamp()});
     if headers
@@ -969,12 +972,15 @@ fn tenant_tool_context(s: &AppState, principal: &str) -> Result<TenantToolContex
         token,
     )]))
     .map_err(|_| tenant_error("tenant connection unavailable"))?;
-    let client = coolify_api::CoolifyClient::new(coolify_api::CoolifyConfig {
-        base_url: connection.base_url,
-        token_source,
-        custom_headers: reqwest::header::HeaderMap::new(),
-        timeout: Duration::from_secs(45),
-    })
+    let client = coolify_api::CoolifyClient::new_hosted_with_local_escape(
+        coolify_api::CoolifyConfig {
+            base_url: connection.base_url,
+            token_source,
+            custom_headers: reqwest::header::HeaderMap::new(),
+            timeout: Duration::from_secs(45),
+        },
+        s.config.allow_insecure_local_targets,
+    )
     .map_err(|_| tenant_error("tenant connection unavailable"))?;
     Ok(TenantToolContext {
         request: TenantRequestContext {

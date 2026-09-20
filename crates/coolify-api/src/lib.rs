@@ -6,6 +6,7 @@ pub mod compatibility;
 mod config;
 mod error;
 pub mod models;
+mod network_policy;
 pub mod resources;
 pub mod route_matrix;
 mod token_source;
@@ -21,6 +22,7 @@ pub use models::{
     ProjectSummary, S3StorageSummary, ScheduledTaskSummary, ServerSummary, ServiceSummary,
     StorageSummary, SystemSummary, TagSummary, ValidationResult,
 };
+pub use network_policy::validate_hosted_base_url;
 pub use token_source::{TokenSource, TokenSourceError};
 pub(crate) fn encode_segment(value: &str) -> String {
     percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()

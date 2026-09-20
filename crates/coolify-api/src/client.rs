@@ -1,3 +1,4 @@
+use crate::network_policy::validate_hosted_base_url;
 use crate::{CoolifyApiError, CoolifyConfig, HttpErrorDetails, MAX_BODY_BYTES};
 use reqwest::{
     Client, Method,
@@ -35,8 +36,36 @@ impl std::fmt::Debug for CoolifyClient {
 }
 impl CoolifyClient {
     pub fn new(config: CoolifyConfig) -> Result<Self, CoolifyApiError> {
+        Self::build(config, false, false)
+    }
+
+    /// Construct a client for hosted tenant traffic. Validation runs before the
+    /// token source is read, and redirects are disabled so a response cannot
+    /// move bearer credentials to an unvalidated destination.
+    pub fn new_hosted(config: CoolifyConfig) -> Result<Self, CoolifyApiError> {
+        Self::new_hosted_with_local_escape(config, false)
+    }
+
+    /// The escape hatch is intentionally explicit and is only wired by the
+    /// debug/test local transport configuration.
+    pub fn new_hosted_with_local_escape(
+        config: CoolifyConfig,
+        allow_insecure_local_targets: bool,
+    ) -> Result<Self, CoolifyApiError> {
+        Self::build(config, true, allow_insecure_local_targets)
+    }
+
+    fn build(
+        config: CoolifyConfig,
+        hosted: bool,
+        allow_insecure_local_targets: bool,
+    ) -> Result<Self, CoolifyApiError> {
+        if hosted && !allow_insecure_local_targets {
+            validate_hosted_base_url(&config.base_url).map_err(CoolifyApiError::Config)?;
+        }
         let client = Client::builder()
             .timeout(config.timeout)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| CoolifyApiError::Transport(e.to_string()))?;
         Ok(Self {
