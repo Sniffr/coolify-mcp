@@ -8,6 +8,7 @@ use axum::{
     response::{Html, IntoResponse, Json, Redirect, Response},
     routing::{get, post},
 };
+use base64::Engine;
 use coolify_api::{CoolifyClient, CoolifyConfig, TokenSource};
 use mcp_tools::{McpApplication, TenantRequestContext, TenantToolContext, ToolResult};
 use oauth::{AuthorizeRequest, OAuthError, RegistrationRequest, TokenRequest};
@@ -995,22 +996,70 @@ fn authorization_redirect(
         }
     }
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct TokenForm {
-    grant_type: String,
+    grant_type: Option<String>,
     code: Option<String>,
     redirect_uri: Option<String>,
-    client_id: String,
+    client_id: Option<String>,
     client_secret: Option<String>,
     code_verifier: Option<String>,
     refresh_token: Option<String>,
     resource: Option<String>,
 }
+
+fn basic_client_credentials(headers: &HeaderMap) -> (Option<String>, Option<String>) {
+    let value = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Basic "));
+    let Some(value) = value else {
+        return (None, None);
+    };
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(value.trim())
+        .ok();
+    let Some(decoded) = decoded else {
+        return (None, None);
+    };
+    let credentials = String::from_utf8(decoded).ok();
+    let Some(credentials) = credentials else {
+        return (None, None);
+    };
+    let Some((id, secret)) = credentials.split_once(':') else {
+        return (None, None);
+    };
+    if id.is_empty() {
+        return (None, None);
+    }
+    let id = (!id.is_empty()).then(|| id.to_owned());
+    let secret = (!secret.is_empty()).then(|| secret.to_owned());
+    (id, secret)
+}
+
+fn parse_token_form(headers: &HeaderMap, body: &[u8]) -> Result<TokenForm, OAuthError> {
+    let is_json = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(';')
+                .next()
+                .is_some_and(|x| x.trim().eq_ignore_ascii_case("application/json"))
+        });
+    if is_json {
+        serde_json::from_slice::<TokenForm>(body)
+            .map_err(|_| OAuthError::InvalidRequest("invalid token request".into()))
+    } else {
+        serde_urlencoded::from_bytes::<TokenForm>(body)
+            .map_err(|_| OAuthError::InvalidRequest("invalid token request".into()))
+    }
+}
+
 async fn token(
     State(s): State<AppState>,
     headers: HeaderMap,
     peer: ConnectInfo<SocketAddr>,
-    axum::extract::Form(f): axum::extract::Form<TokenForm>,
+    body: Bytes,
 ) -> Response {
     if !persistence_ready(&s) {
         return persistence_unavailable();
@@ -1018,22 +1067,49 @@ async fn token(
     if !limited(&s, &headers, Some(peer.0), "token") {
         return rate_error();
     }
-    let req = TokenRequest {
-        grant_type: f.grant_type,
-        code: f.code.unwrap_or_default(),
-        redirect_uri: f.redirect_uri,
-        client_id: f.client_id,
-        client_secret: f.client_secret,
-        code_verifier: f.code_verifier,
-        refresh_token: f.refresh_token.clone(),
-        resource: f.resource,
+    let mut f = match parse_token_form(&headers, &body) {
+        Ok(form) => form,
+        Err(e) => {
+            mark_persistence_error(&s, &e);
+            return oauth_error(e);
+        }
     };
-    let result = if req.grant_type == "refresh_token" {
-        f.refresh_token
-            .as_deref()
-            .ok_or(OAuthError::InvalidGrant)
-            .and_then(|t| s.config.oauth.refresh(t))
+    // RFC 6749 Section 2.3.1: client credentials may arrive via HTTP Basic.
+    // Body fields take precedence; Basic fills only missing values.
+    let (basic_id, basic_secret) = basic_client_credentials(&headers);
+    if f.client_id.as_deref().is_none_or(str::is_empty) {
+        f.client_id = basic_id;
+    }
+    if f.client_secret.as_deref().is_none_or(str::is_empty) {
+        f.client_secret = basic_secret;
+    }
+    let grant_type = f.grant_type.as_deref().unwrap_or("").to_owned();
+    if grant_type.is_empty() {
+        mark_persistence_error(
+            &s,
+            &OAuthError::InvalidRequest("invalid token request".into()),
+        );
+        return oauth_error(OAuthError::InvalidRequest("invalid token request".into()));
+    }
+    let result = if grant_type == "refresh_token" {
+        match f.refresh_token.as_deref() {
+            Some(t) if !t.is_empty() => s.config.oauth.refresh(t),
+            _ => Err(OAuthError::InvalidGrant),
+        }
     } else {
+        let Some(client_id) = f.client_id.filter(|v| !v.is_empty()) else {
+            return oauth_error(OAuthError::InvalidClient);
+        };
+        let req = TokenRequest {
+            grant_type,
+            code: f.code.unwrap_or_default(),
+            redirect_uri: f.redirect_uri,
+            client_id,
+            client_secret: f.client_secret,
+            code_verifier: f.code_verifier,
+            refresh_token: f.refresh_token.clone(),
+            resource: f.resource,
+        };
         s.config.oauth.exchange_code(req)
     };
     match result {

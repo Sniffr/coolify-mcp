@@ -293,3 +293,193 @@ async fn oversized_body_is_rejected() {
     let response = app.oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
+
+fn token_pkce() -> (String, String) {
+    use base64::Engine;
+    use sha2::Digest;
+    let verifier = "test-verifier-that-is-long-enough-0123456789".to_owned();
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(sha2::Sha256::digest(verifier.as_bytes()));
+    (verifier, challenge)
+}
+
+async fn token_test_app() -> (
+    tower::util::BoxCloneService<Request<Body>, axum::response::Response, std::convert::Infallible>,
+    std::sync::Arc<oauth::OAuthProvider>,
+    oauth::RegistrationResponse,
+) {
+    use std::net::SocketAddr;
+    use tower::Service;
+    let config = HttpConfig::for_tests();
+    let oauth = config.oauth.clone();
+    let client = oauth
+        .register(oauth::RegistrationRequest {
+            redirect_uris: vec!["https://client.test/callback".into()],
+            client_name: Some("token-compat-client".into()),
+        })
+        .unwrap();
+    let app = router_with_app(config, TestApp);
+    let mut make = app.into_make_service_with_connect_info::<SocketAddr>();
+    let peer: SocketAddr = "127.0.0.1:40001".parse().unwrap();
+    let svc = make.call(peer).await.unwrap();
+    (tower::util::BoxCloneService::new(svc), oauth, client)
+}
+
+fn mint_code(
+    oauth: &oauth::OAuthProvider,
+    client: &oauth::RegistrationResponse,
+) -> (String, String) {
+    let state = oauth
+        .create_state(&client.client_id, "https://client.test/callback")
+        .unwrap();
+    let (verifier, challenge) = token_pkce();
+    let authorization = oauth
+        .authorize(oauth::AuthorizeRequest {
+            client_id: client.client_id.clone(),
+            redirect_uri: "https://client.test/callback".into(),
+            response_type: "code".into(),
+            resource: "https://example.test/mcp".into(),
+            scope: "mcp".into(),
+            state,
+            code_challenge: challenge,
+            code_challenge_method: "S256".into(),
+        })
+        .unwrap();
+    (authorization.code, verifier)
+}
+
+async fn post_token(
+    svc: &mut tower::util::BoxCloneService<
+        Request<Body>,
+        axum::response::Response,
+        std::convert::Infallible,
+    >,
+    content_type: &str,
+    extra_headers: &[(&str, String)],
+    body: String,
+) -> (StatusCode, serde_json::Value, String) {
+    use tower::Service;
+    let mut builder = Request::builder()
+        .uri("/oauth/token")
+        .method("POST")
+        .header("content-type", content_type);
+    for (name, value) in extra_headers {
+        builder = builder.header(*name, value.as_str());
+    }
+    let response = svc
+        .call(builder.body(Body::from(body)).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let raw = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+    (status, json, text)
+}
+
+#[tokio::test]
+async fn token_endpoint_accepts_json_body() {
+    let (mut svc, oauth, client) = token_test_app().await;
+    let (code, verifier) = mint_code(&oauth, &client);
+    let body = serde_json::json!({
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": "https://client.test/callback",
+        "client_id": client.client_id,
+        "client_secret": client.client_secret,
+        "code_verifier": verifier,
+        "resource": "https://example.test/mcp",
+    })
+    .to_string();
+    let (status, json, _) = post_token(&mut svc, "application/json", &[], body).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(json.get("access_token").is_some());
+    assert!(json.get("refresh_token").is_some());
+}
+
+#[tokio::test]
+async fn token_endpoint_accepts_basic_auth_client_credentials() {
+    use base64::Engine;
+    let (mut svc, oauth, client) = token_test_app().await;
+    let (code, verifier) = mint_code(&oauth, &client);
+    let credentials = base64::engine::general_purpose::STANDARD
+        .encode(format!("{}:{}", client.client_id, client.client_secret));
+    // No client_id/client_secret in the form body; they arrive via Basic auth.
+    let body = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("grant_type", "authorization_code")
+        .append_pair("code", &code)
+        .append_pair("redirect_uri", "https://client.test/callback")
+        .append_pair("code_verifier", &verifier)
+        .append_pair("resource", "https://example.test/mcp")
+        .finish();
+    let (status, json, _) = post_token(
+        &mut svc,
+        "application/x-www-form-urlencoded",
+        &[("authorization", format!("Basic {credentials}"))],
+        body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(json.get("access_token").is_some());
+}
+
+#[tokio::test]
+async fn token_endpoint_returns_json_error_instead_of_422_text() {
+    let (mut svc, _oauth, _client) = token_test_app().await;
+    // Form body missing client_id entirely (the Claude Code failure mode).
+    let body = "grant_type=authorization_code&code=whatever".to_owned();
+    let (status, json, text) =
+        post_token(&mut svc, "application/x-www-form-urlencoded", &[], body).await;
+    assert_ne!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        json.get("error").is_some(),
+        "expected JSON error, got: {text}"
+    );
+    assert!(!text.contains("Failed to deserialize"));
+
+    // Malformed JSON body must also be a JSON OAuth error, not plain text.
+    let (status, json, text) = post_token(
+        &mut svc,
+        "application/json",
+        &[],
+        "{not valid json".to_owned(),
+    )
+    .await;
+    assert_ne!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        json.get("error").is_some(),
+        "expected JSON error, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn refresh_token_grant_allows_missing_client_id() {
+    let (mut svc, oauth, client) = token_test_app().await;
+    let (code, verifier) = mint_code(&oauth, &client);
+    let body = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("grant_type", "authorization_code")
+        .append_pair("code", &code)
+        .append_pair("redirect_uri", "https://client.test/callback")
+        .append_pair("client_id", &client.client_id)
+        .append_pair("client_secret", &client.client_secret)
+        .append_pair("code_verifier", &verifier)
+        .append_pair("resource", "https://example.test/mcp")
+        .finish();
+    let (status, json, _) =
+        post_token(&mut svc, "application/x-www-form-urlencoded", &[], body).await;
+    assert_eq!(status, StatusCode::OK);
+    let refresh_token = json["refresh_token"].as_str().unwrap().to_owned();
+
+    // Refresh with no client_id in body and no Basic header.
+    let body = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("grant_type", "refresh_token")
+        .append_pair("refresh_token", &refresh_token)
+        .finish();
+    let (status, json, text) =
+        post_token(&mut svc, "application/x-www-form-urlencoded", &[], body).await;
+    assert_ne!(status, StatusCode::UNPROCESSABLE_ENTITY, "{text}");
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert!(json.get("access_token").is_some());
+}
