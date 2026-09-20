@@ -3,7 +3,7 @@ use axum::{
     Router,
     body::Bytes,
     extract::{ConnectInfo, DefaultBodyLimit, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Json, Redirect, Response},
     routing::{get, post},
 };
@@ -20,6 +20,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use tenant::UserId;
 use tower_http::timeout::{RequestBodyTimeoutLayer, TimeoutLayer};
 
 #[derive(Clone)]
@@ -56,11 +57,31 @@ impl RateLimiter {
     }
 }
 #[derive(Clone)]
+struct PendingAuthorization {
+    request: AuthorizeRequest,
+    expires_at: Instant,
+}
+
+#[derive(Clone)]
+struct GithubContinuation {
+    mcp_state: String,
+    expires_at: Instant,
+}
+
+#[derive(Default)]
+struct BrowserState {
+    pending: HashMap<String, PendingAuthorization>,
+    github: HashMap<String, GithubContinuation>,
+    sessions: HashMap<String, (UserId, Instant)>,
+}
+
+#[derive(Clone)]
 struct AppState {
     app: Arc<dyn McpApplication>,
     config: HttpConfig,
     rate: RateLimiter,
     sessions: Arc<Mutex<HashMap<String, Instant>>>,
+    browser: Arc<Mutex<BrowserState>>,
     audit: Option<Arc<Mutex<AuditLogger<File>>>>,
 }
 fn open_audit(config: &HttpConfig) -> Option<Arc<Mutex<AuditLogger<File>>>> {
@@ -167,6 +188,7 @@ pub fn router_with_app<A: McpApplication + 'static>(config: HttpConfig, app: A) 
         config,
         rate: RateLimiter::new(),
         sessions: Arc::new(Mutex::new(HashMap::new())),
+        browser: Arc::new(Mutex::new(BrowserState::default())),
         audit,
     };
     let request_timeout = state.config.request_timeout;
@@ -181,6 +203,8 @@ pub fn router_with_app<A: McpApplication + 'static>(config: HttpConfig, app: A) 
         .route("/oauth/authorize", get(authorize))
         .route("/oauth/state", post(oauth_state))
         .route("/oauth/token", post(token))
+        .route("/auth/github/start", get(github_start))
+        .route("/auth/github/callback", get(github_callback))
         .route("/mcp", post(mcp).get(mcp_get).delete(mcp_delete))
         .layer(DefaultBodyLimit::max(state.config.max_body_bytes))
         .layer(RequestBodyTimeoutLayer::new(request_timeout))
@@ -270,6 +294,186 @@ async fn oauth_state(
     }
 }
 #[derive(Deserialize)]
+struct GithubStartQuery {
+    state: String,
+}
+
+#[derive(Deserialize)]
+struct GithubCallbackQuery {
+    state: Option<String>,
+    code: Option<String>,
+}
+
+async fn github_start(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    peer: ConnectInfo<SocketAddr>,
+    Query(query): Query<GithubStartQuery>,
+) -> Response {
+    if !limited(&s, &headers, Some(peer.0), "github_start") {
+        return rate_error();
+    }
+    let Some(hosted) = s.config.hosted_auth.as_ref() else {
+        return auth_failure();
+    };
+    cleanup_browser(&s);
+    if !s.browser.lock().unwrap().pending.contains_key(&query.state) {
+        return auth_failure();
+    }
+    let github_state = uuid::Uuid::new_v4().to_string();
+    s.browser.lock().unwrap().github.insert(
+        github_state.clone(),
+        GithubContinuation {
+            mcp_state: query.state,
+            expires_at: Instant::now() + Duration::from_secs(600),
+        },
+    );
+    let mut response =
+        Redirect::to(hosted.github.authorization_url(&github_state).as_str()).into_response();
+    response.headers_mut().append(
+        "set-cookie",
+        secure_cookie("mcp_github_state", &github_state, 600),
+    );
+    response
+}
+
+async fn github_callback(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    peer: ConnectInfo<SocketAddr>,
+    Query(query): Query<GithubCallbackQuery>,
+) -> Response {
+    if !limited(&s, &headers, Some(peer.0), "github_callback") {
+        return rate_error();
+    }
+    let Some(hosted) = s.config.hosted_auth.as_ref() else {
+        return auth_failure();
+    };
+    let Some(state) = query.state.filter(|value| !value.is_empty()) else {
+        return auth_failure();
+    };
+    let Some(code) = query.code.filter(|value| !value.is_empty()) else {
+        return auth_failure();
+    };
+    if cookie(&headers, "mcp_github_state").as_deref() != Some(state.as_str()) {
+        return auth_failure();
+    }
+    cleanup_browser(&s);
+    let Some(continuation) = s.browser.lock().unwrap().github.remove(&state) else {
+        return auth_failure();
+    };
+    let Some(pending) = s
+        .browser
+        .lock()
+        .unwrap()
+        .pending
+        .remove(&continuation.mcp_state)
+    else {
+        return auth_failure();
+    };
+    let github_user = match hosted.github.exchange_callback(&code).await {
+        Ok(user) => user,
+        Err(_) => return auth_failure(),
+    };
+    let user = match hosted
+        .tenant
+        .upsert_user(&github_user.github_id, &github_user.login)
+    {
+        Ok(user) => user,
+        Err(_) => return auth_failure(),
+    };
+    let client_id = pending.request.client_id.clone();
+    let authorization = match s.config.oauth.authorize_for_user(pending.request, user.id) {
+        Ok(authorization) => authorization,
+        Err(_) => return auth_failure(),
+    };
+    if hosted
+        .tenant
+        .create_grant(user.id, &client_id, &s.config.oauth.resource())
+        .is_err()
+    {
+        return auth_failure();
+    }
+    let browser_session = uuid::Uuid::new_v4().to_string();
+    s.browser.lock().unwrap().sessions.insert(
+        browser_session.clone(),
+        (user.id, Instant::now() + s.config.session_ttl),
+    );
+    let mut response = authorization_redirect(&s, Ok(authorization));
+    response.headers_mut().append(
+        "set-cookie",
+        secure_cookie(
+            "mcp_session",
+            &browser_session,
+            s.config.session_ttl.as_secs(),
+        ),
+    );
+    response
+        .headers_mut()
+        .append("set-cookie", expired_cookie("mcp_github_state"));
+    response
+}
+
+fn cleanup_browser(s: &AppState) {
+    let now = Instant::now();
+    let mut browser = s.browser.lock().unwrap();
+    browser
+        .pending
+        .retain(|_, pending| pending.expires_at > now);
+    browser
+        .github
+        .retain(|_, continuation| continuation.expires_at > now);
+    browser
+        .sessions
+        .retain(|_, (_, expires_at)| *expires_at > now);
+}
+
+fn browser_user(s: &AppState, headers: &HeaderMap) -> Option<UserId> {
+    let session = cookie(headers, "mcp_session")?;
+    cleanup_browser(s);
+    s.browser
+        .lock()
+        .unwrap()
+        .sessions
+        .get(&session)
+        .map(|(user_id, _)| *user_id)
+}
+
+fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get("cookie")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value.split(';').find_map(|part| {
+                let (key, value) = part.trim().split_once('=')?;
+                (key == name).then(|| value.to_owned())
+            })
+        })
+}
+
+fn secure_cookie(name: &str, value: &str, max_age: u64) -> HeaderValue {
+    HeaderValue::from_str(&format!(
+        "{name}={value}; Max-Age={max_age}; Path=/; Secure; HttpOnly; SameSite=Lax"
+    ))
+    .expect("cookie values are generated from safe identifiers")
+}
+
+fn expired_cookie(name: &str) -> HeaderValue {
+    HeaderValue::from_str(&format!(
+        "{name}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax"
+    ))
+    .expect("cookie name is static")
+}
+
+fn auth_failure() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"error":"authentication_failed","error_description":"authentication failed"})),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
 struct AuthorizeQuery {
     client_id: String,
     redirect_uri: String,
@@ -299,14 +503,60 @@ async fn authorize(
         code_challenge: q.code_challenge,
         code_challenge_method: q.code_challenge_method,
     };
-    match s.config.oauth.authorize(req) {
-        Ok(v) => Redirect::to(&format!(
-            "{}?code={}&state={}",
-            v.redirect_uri, v.code, v.state
-        ))
-        .into_response(),
+    if s.config.hosted_auth.is_some() {
+        if let Some(user_id) = browser_user(&s, &headers) {
+            return authorization_redirect(&s, s.config.oauth.authorize_for_user(req, user_id));
+        }
+
+        if let Err(error) = s
+            .config
+            .oauth
+            .create_state(&req.client_id, &req.redirect_uri)
+        {
+            mark_persistence_error(&s, &error);
+            return oauth_error(error);
+        }
+        let mcp_state = req.state.clone();
+        cleanup_browser(&s);
+        s.browser.lock().unwrap().pending.insert(
+            mcp_state.clone(),
+            PendingAuthorization {
+                request: req,
+                expires_at: Instant::now() + s.config.session_ttl.min(Duration::from_secs(600)),
+            },
+        );
+        let mut location = crate::http::public_base(&s.config.public_url);
+        location.push_str("/auth/github/start?state=");
+        location.push_str(
+            &url::form_urlencoded::byte_serialize(mcp_state.as_bytes()).collect::<String>(),
+        );
+        return Redirect::to(&location).into_response();
+    }
+
+    authorization_redirect(&s, s.config.oauth.authorize(req))
+}
+
+fn authorization_redirect(
+    s: &AppState,
+    result: Result<oauth::AuthorizationResponse, OAuthError>,
+) -> Response {
+    match result {
+        Ok(v) => {
+            let mut location = v.redirect_uri;
+            let separator = if location.contains('?') { '&' } else { '?' };
+            location.push(separator);
+            location.push_str("code=");
+            location.push_str(
+                &url::form_urlencoded::byte_serialize(v.code.as_bytes()).collect::<String>(),
+            );
+            location.push_str("&state=");
+            location.push_str(
+                &url::form_urlencoded::byte_serialize(v.state.as_bytes()).collect::<String>(),
+            );
+            Redirect::to(&location).into_response()
+        }
         Err(e) => {
-            mark_persistence_error(&s, &e);
+            mark_persistence_error(s, &e);
             oauth_error(e)
         }
     }
@@ -390,6 +640,14 @@ fn authorized(headers: &HeaderMap, s: &AppState) -> Result<String, StatusCode> {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or(StatusCode::UNAUTHORIZED)?;
+    if s.config.hosted_auth.is_some() {
+        return s
+            .config
+            .oauth
+            .verify_bearer_user(value, &crate::http::mcp_resource_url(&s.config.public_url))
+            .map(|user_id| user_id.to_string())
+            .map_err(|_| StatusCode::UNAUTHORIZED);
+    }
     s.config
         .oauth
         .verify_bearer(value, &crate::http::mcp_resource_url(&s.config.public_url))

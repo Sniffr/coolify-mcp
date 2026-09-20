@@ -142,6 +142,138 @@ fn exact_resource_and_code_single_use_and_refresh_replay_revokes_family() {
     );
 }
 #[test]
+fn code_and_access_token_are_bound_to_user_id() {
+    let directory = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let tenants = tenant::TenantStore::open(
+        &directory.path().join("tenant.sqlite"),
+        "fixture-encryption-key-material-that-is-long-enough",
+    )
+    .unwrap();
+    let user_a = tenants.upsert_user("1001", "fixture-user-a").unwrap();
+    let user_b = tenants.upsert_user("1002", "fixture-user-b").unwrap();
+    let provider = OAuthProvider::new("https://server.test".into(), "/mcp".into());
+    let client = provider
+        .register(RegistrationRequest {
+            redirect_uris: vec!["https://client.test/cb".into()],
+            client_name: None,
+        })
+        .unwrap();
+    let verifier = "a-secret-verifier-that-is-long-enough-123456789";
+    let challenge =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(verifier));
+    let request = |state| AuthorizeRequest {
+        client_id: client.client_id.clone(),
+        redirect_uri: "https://client.test/cb".into(),
+        response_type: "code".into(),
+        resource: "https://server.test/mcp".into(),
+        scope: "mcp".into(),
+        state,
+        code_challenge: challenge.clone(),
+        code_challenge_method: "S256".into(),
+    };
+    let authorization = provider
+        .authorize_for_user(
+            request(
+                provider
+                    .create_state(&client.client_id, "https://client.test/cb")
+                    .unwrap(),
+            ),
+            user_a.id,
+        )
+        .unwrap();
+    let token = provider
+        .exchange_code(TokenRequest {
+            grant_type: "authorization_code".into(),
+            code: authorization.code,
+            redirect_uri: Some("https://client.test/cb".into()),
+            client_id: client.client_id,
+            client_secret: Some(client.client_secret),
+            code_verifier: Some(verifier.into()),
+            refresh_token: None,
+            resource: Some("https://server.test/mcp".into()),
+        })
+        .unwrap();
+    let resolved = provider
+        .verify_bearer_user(&token.access_token, "https://server.test/mcp")
+        .unwrap();
+    assert_eq!(resolved, user_a.id);
+    assert_ne!(resolved, user_b.id);
+}
+
+#[test]
+fn refresh_replay_revokes_only_the_affected_user_family() {
+    let directory = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let tenants = tenant::TenantStore::open(
+        &directory.path().join("tenant.sqlite"),
+        "fixture-encryption-key-material-that-is-long-enough",
+    )
+    .unwrap();
+    let user_a = tenants.upsert_user("2001", "fixture-user-a").unwrap();
+    let user_b = tenants.upsert_user("2002", "fixture-user-b").unwrap();
+    let provider = OAuthProvider::new("https://server.test".into(), "/mcp".into());
+    let client = provider
+        .register(RegistrationRequest {
+            redirect_uris: vec!["https://client.test/cb".into()],
+            client_name: None,
+        })
+        .unwrap();
+    let issue = |user_id| {
+        let verifier = format!("verifier-{user_id}-long-enough-123456789");
+        let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(sha2::Sha256::digest(verifier.as_bytes()));
+        let authorization = provider
+            .authorize_for_user(
+                AuthorizeRequest {
+                    client_id: client.client_id.clone(),
+                    redirect_uri: "https://client.test/cb".into(),
+                    response_type: "code".into(),
+                    resource: "https://server.test/mcp".into(),
+                    scope: "mcp".into(),
+                    state: provider
+                        .create_state(&client.client_id, "https://client.test/cb")
+                        .unwrap(),
+                    code_challenge: challenge,
+                    code_challenge_method: "S256".into(),
+                },
+                user_id,
+            )
+            .unwrap();
+        provider
+            .exchange_code(TokenRequest {
+                grant_type: "authorization_code".into(),
+                code: authorization.code,
+                redirect_uri: Some("https://client.test/cb".into()),
+                client_id: client.client_id.clone(),
+                client_secret: Some(client.client_secret.clone()),
+                code_verifier: Some(verifier),
+                refresh_token: None,
+                resource: Some("https://server.test/mcp".into()),
+            })
+            .unwrap()
+    };
+    let token_a = issue(user_a.id);
+    let token_b = issue(user_b.id);
+    let _ = provider.refresh(&token_a.refresh_token).unwrap();
+    assert!(provider.refresh(&token_a.refresh_token).is_err());
+    assert_eq!(
+        provider
+            .verify_bearer_user(&token_b.access_token, "https://server.test/mcp")
+            .unwrap(),
+        user_b.id
+    );
+}
+
+#[test]
 fn expired_authorization_code_is_rejected() {
     use oauth::{AuthorizationCode, Client, OAuthStateStore, PersistedState};
     use std::collections::HashMap;
@@ -167,6 +299,7 @@ fn expired_authorization_code_is_rejected() {
             AuthorizationCode {
                 code_hash: h(code),
                 client_id: id.into(),
+                user_id: None,
                 redirect_uri: "https://client.test/cb".into(),
                 resource: "https://server.test/mcp".into(),
                 scope: "mcp".into(),

@@ -140,6 +140,22 @@ impl OAuthProvider {
             .cloned()
     }
     pub fn authorize(&self, req: AuthorizeRequest) -> Result<AuthorizationResponse, OAuthError> {
+        self.authorize_inner(req, None)
+    }
+
+    pub fn authorize_for_user(
+        &self,
+        req: AuthorizeRequest,
+        user_id: tenant::UserId,
+    ) -> Result<AuthorizationResponse, OAuthError> {
+        self.authorize_inner(req, Some(user_id))
+    }
+
+    fn authorize_inner(
+        &self,
+        req: AuthorizeRequest,
+        user_id: Option<tenant::UserId>,
+    ) -> Result<AuthorizationResponse, OAuthError> {
         let resource = canonical_resource(&req.resource)?;
         if resource != self.resource {
             return Err(OAuthError::InvalidRequest("resource mismatch".into()));
@@ -183,6 +199,7 @@ impl OAuthProvider {
             AuthorizationCode {
                 code_hash: hash(&code),
                 client_id: req.client_id,
+                user_id,
                 redirect_uri: req.redirect_uri.clone(),
                 resource,
                 scope: req.scope,
@@ -238,15 +255,20 @@ impl OAuthProvider {
         let previous = i.data.clone();
         i.data.codes.get_mut(&hash(&req.code)).unwrap().used = true;
         let gid = random();
-        i.data
-            .grants
-            .insert(gid.clone(), GrantFamily { revoked: false });
+        i.data.grants.insert(
+            gid.clone(),
+            GrantFamily {
+                revoked: false,
+                user_id: code.user_id,
+            },
+        );
         let out = issue(
             &mut i.data,
             &gid,
             &req.client_id,
             &self.resource,
             &code.scope,
+            code.user_id,
         );
         if let Err(error) = persist(&i) {
             i.data = previous;
@@ -269,10 +291,11 @@ impl OAuthProvider {
                     v.client_id.clone(),
                     v.resource.clone(),
                     v.scope.clone(),
+                    v.user_id,
                 )
             })
             .ok_or(OAuthError::InvalidGrant)?;
-        let (gid, bad, cid, res, scope) = found;
+        let (gid, bad, cid, res, scope, user_id) = found;
         if i.data.grants.get(&gid).is_some_and(|grant| grant.revoked) {
             return Err(OAuthError::InvalidGrant);
         }
@@ -293,7 +316,7 @@ impl OAuthProvider {
         if let Some(t) = i.data.tokens.get_mut(&key) {
             t.rotated = true;
         }
-        let out = issue(&mut i.data, &gid, &cid, &res, &scope);
+        let out = issue(&mut i.data, &gid, &cid, &res, &scope, user_id);
         if let Err(error) = persist(&i) {
             i.data = previous;
             return Err(error);
@@ -301,6 +324,21 @@ impl OAuthProvider {
         Ok(out)
     }
     pub fn verify_bearer(&self, token: &str, resource: &str) -> Result<String, OAuthError> {
+        let token = self.verify_access_token(token, resource)?;
+        Ok(token.client_id.clone())
+    }
+
+    pub fn verify_bearer_user(
+        &self,
+        token: &str,
+        resource: &str,
+    ) -> Result<tenant::UserId, OAuthError> {
+        self.verify_access_token(token, resource)?
+            .user_id
+            .ok_or(OAuthError::InvalidToken)
+    }
+
+    fn verify_access_token(&self, token: &str, resource: &str) -> Result<TokenRecord, OAuthError> {
         if canonical_resource(resource).ok().as_deref() != Some(&self.resource) {
             return Err(OAuthError::InvalidToken);
         }
@@ -320,7 +358,7 @@ impl OAuthProvider {
         if t.resource != self.resource {
             Err(OAuthError::InvalidToken)
         } else {
-            Ok(t.client_id.clone())
+            Ok(t.clone())
         }
     }
     pub fn load_store(&self, store: &OAuthStateStore) {
@@ -337,7 +375,14 @@ impl OAuthProvider {
         persist(&i)
     }
 }
-fn issue(s: &mut PersistedState, gid: &str, cid: &str, res: &str, scope: &str) -> TokenResponse {
+fn issue(
+    s: &mut PersistedState,
+    gid: &str,
+    cid: &str,
+    res: &str,
+    scope: &str,
+    user_id: Option<tenant::UserId>,
+) -> TokenResponse {
     let a = random();
     let r = random();
     s.tokens.insert(
@@ -346,6 +391,7 @@ fn issue(s: &mut PersistedState, gid: &str, cid: &str, res: &str, scope: &str) -
             token_hash: hash(&a),
             grant_id: gid.into(),
             client_id: cid.into(),
+            user_id,
             resource: res.into(),
             scope: scope.into(),
             expires_at: now() + 3600,
@@ -360,6 +406,7 @@ fn issue(s: &mut PersistedState, gid: &str, cid: &str, res: &str, scope: &str) -
             token_hash: hash(&r),
             grant_id: gid.into(),
             client_id: cid.into(),
+            user_id,
             resource: res.into(),
             scope: scope.into(),
             expires_at: now() + 86400,

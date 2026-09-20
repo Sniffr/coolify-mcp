@@ -10,11 +10,12 @@ path = "src/lib.rs"
 aes-gcm = "0.10"
 rusqlite = { version = "0.32", features = ["bundled"] }
 secrecy = "0.10"
+serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 safety = { path = "../safety" }
 thiserror = "2"
 url = "2"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 zeroize = "1"
 
 [dev-dependencies]

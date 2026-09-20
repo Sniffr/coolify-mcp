@@ -1,3 +1,4 @@
+use identity::GitHubIdentityProvider;
 use oauth::OAuthProvider;
 use std::{
     net::SocketAddr,
@@ -8,6 +9,7 @@ use std::{
     },
     time::Duration,
 };
+use tenant::TenantStore;
 use thiserror::Error;
 use tower::Service;
 use url::Url;
@@ -55,10 +57,17 @@ pub fn normalize_public_url_with_insecure(
     Ok(url)
 }
 #[derive(Clone)]
+pub struct HostedAuth {
+    pub tenant: Arc<TenantStore>,
+    pub github: Arc<GitHubIdentityProvider>,
+}
+
+#[derive(Clone)]
 pub struct HttpConfig {
     pub public_url: Url,
     pub bind: SocketAddr,
     pub oauth: Arc<OAuthProvider>,
+    pub hosted_auth: Option<Arc<HostedAuth>>,
     pub max_body_bytes: usize,
     pub header_timeout: Duration,
     pub request_timeout: Duration,
@@ -75,6 +84,7 @@ impl HttpConfig {
         let public_url = Url::parse("https://example.test").unwrap();
         Self {
             oauth: Arc::new(OAuthProvider::new(public_base(&public_url), "/mcp".into())),
+            hosted_auth: None,
             public_url,
             bind: "127.0.0.1:0".parse().unwrap(),
             max_body_bytes: 5 * 1024 * 1024,

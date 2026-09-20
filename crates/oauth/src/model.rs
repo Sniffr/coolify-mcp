@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tenant::UserId;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Client {
@@ -66,6 +67,8 @@ pub struct PersistedState {
 pub struct AuthorizationCode {
     pub code_hash: String,
     pub client_id: String,
+    #[serde(default)]
+    pub user_id: Option<UserId>,
     pub redirect_uri: String,
     pub resource: String,
     pub scope: String,
@@ -78,6 +81,8 @@ pub struct TokenRecord {
     pub token_hash: String,
     pub grant_id: String,
     pub client_id: String,
+    #[serde(default)]
+    pub user_id: Option<UserId>,
     pub resource: String,
     pub scope: String,
     pub expires_at: u64,
@@ -88,4 +93,6 @@ pub struct TokenRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GrantFamily {
     pub revoked: bool,
+    #[serde(default)]
+    pub user_id: Option<UserId>,
 }

@@ -200,6 +200,7 @@ async fn main() {
             public_url,
             bind,
             oauth,
+            hosted_auth: None,
             max_body_bytes: 5 * 1024 * 1024,
             header_timeout: Duration::from_secs(15),
             request_timeout: Duration::from_secs(30),

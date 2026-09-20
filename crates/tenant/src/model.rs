@@ -2,10 +2,11 @@ use std::fmt;
 
 use safety::CapabilityProfile;
 use secrecy::SecretString;
+use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct UserId(Uuid);
 
 impl UserId {
