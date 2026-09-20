@@ -92,3 +92,45 @@ fn logs_and_deployment_projection_are_bounded() {
 fn pagination_is_encoded() {
     assert_eq!(coolify_api::pagination_query(2, 50), "page=2&per_page=50");
 }
+
+#[test]
+fn application_list_accepts_pagination_envelopes_and_id_fallback() {
+    // Bare array (existing behavior).
+    let bare: Vec<ApplicationSummary> =
+        serde_json::from_value(json!([{"uuid":"a1","name":"web"}])).unwrap();
+    assert_eq!(bare[0].uuid, "a1");
+
+    // Real Coolify versions wrap lists in a Laravel pagination envelope.
+    // request_list normalizes these; the item parsing must also tolerate
+    // numeric `id` without `uuid`.
+    let envelope_item: ApplicationSummary =
+        serde_json::from_value(json!({"id":7,"name":"web"})).unwrap();
+    assert_eq!(envelope_item.uuid, "7");
+    assert_eq!(envelope_item.name, "web");
+}
+
+#[tokio::test]
+async fn application_list_accepts_data_envelope_over_http() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
+        let body = r#"{"data":[{"uuid":"a","name":"web"}],"meta":{"total":1}}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+    });
+    let mut env = HashMap::new();
+    env.insert("COOLIFY_BASE_URL".into(), format!("http://{addr}"));
+    env.insert("COOLIFY_ACCESS_TOKEN".into(), "token".into());
+    let client = CoolifyClient::new(config_from_env(&env, false).unwrap()).unwrap();
+    let apps = client.list_applications(1, 50).await.unwrap();
+    assert_eq!(apps.len(), 1);
+    assert_eq!(apps[0].uuid, "a");
+}

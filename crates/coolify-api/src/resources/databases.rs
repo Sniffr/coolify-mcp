@@ -3,7 +3,7 @@ use reqwest::Method;
 use serde_json::Value;
 impl CoolifyClient {
     pub async fn list_databases(&self) -> Result<Vec<DatabaseSummary>, CoolifyApiError> {
-        self.request_json(Method::GET, "/databases", None).await
+        self.request_list(Method::GET, "/databases", None).await
     }
     pub async fn get_database(&self, uuid: &str) -> Result<DatabaseSummary, CoolifyApiError> {
         self.request_json(

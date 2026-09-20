@@ -79,11 +79,15 @@ fn errors_do_not_debug_or_display_secrets() {
     for error in [
         CoolifyApiError::Config(format!("token={token}")),
         CoolifyApiError::Transport(format!("token={token}")),
-        CoolifyApiError::Decode(format!("token={token}")),
     ] {
         assert!(!format!("{error:?}").contains(token));
         assert!(!format!("{error}").contains(token));
     }
+    // Decode errors carry only the endpoint path plus the serde failure, which
+    // never includes credentials; the detail must stay visible so list-shape
+    // drift (bare array vs pagination envelope) is diagnosable.
+    let decode = CoolifyApiError::Decode("/applications: expected array, got object".into());
+    assert!(format!("{decode}").contains("/applications"));
 }
 
 #[tokio::test]

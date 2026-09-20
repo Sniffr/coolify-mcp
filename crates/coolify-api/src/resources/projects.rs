@@ -3,7 +3,7 @@ use reqwest::Method;
 use serde_json::Value;
 impl CoolifyClient {
     pub async fn list_projects(&self) -> Result<Vec<ProjectSummary>, CoolifyApiError> {
-        self.request_json(Method::GET, "/projects", None).await
+        self.request_list(Method::GET, "/projects", None).await
     }
     pub async fn get_project(&self, uuid: &str) -> Result<ProjectSummary, CoolifyApiError> {
         self.request_json(

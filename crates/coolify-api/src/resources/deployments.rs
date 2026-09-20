@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::time::{Duration, Instant};
 impl CoolifyClient {
     pub async fn list_deployments(&self) -> Result<Vec<DeploymentSummary>, CoolifyApiError> {
-        self.request_json(Method::GET, "/deployments", None).await
+        self.request_list(Method::GET, "/deployments", None).await
     }
     pub async fn list_application_deployments(
         &self,
@@ -12,7 +12,7 @@ impl CoolifyClient {
         skip: u32,
         take: u32,
     ) -> Result<Vec<DeploymentSummary>, CoolifyApiError> {
-        self.request_json(
+        self.request_list(
             Method::GET,
             &format!(
                 "/deployments/applications/{}?skip={skip}&take={take}",

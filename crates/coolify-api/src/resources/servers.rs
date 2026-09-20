@@ -6,7 +6,7 @@ impl CoolifyClient {
         page: u32,
         per_page: u32,
     ) -> Result<Vec<ServerSummary>, CoolifyApiError> {
-        self.request_json(
+        self.request_list(
             Method::GET,
             &format!("/servers?page={page}&per_page={per_page}"),
             None,

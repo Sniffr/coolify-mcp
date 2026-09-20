@@ -124,15 +124,41 @@ impl CoolifyClient {
             .map(|v| v.to_ascii_lowercase().contains("application/json"))
             .unwrap_or(false);
         if !is_json {
-            return Err(CoolifyApiError::Decode("response was not JSON".into()));
+            return Err(CoolifyApiError::Decode(format!(
+                "{path}: response was not JSON"
+            )));
         }
         let bytes = read_bounded(response)
             .await
-            .map_err(|e| CoolifyApiError::Decode(e.to_string()))?;
-        let value: Value =
-            serde_json::from_slice(&bytes).map_err(|e| CoolifyApiError::Decode(e.to_string()))?;
+            .map_err(|e| CoolifyApiError::Decode(format!("{path}: {e}")))?;
+        let value: Value = serde_json::from_slice(&bytes)
+            .map_err(|e| CoolifyApiError::Decode(format!("{path}: {e}")))?;
         let sanitized = safety::sanitize_json(&value, false);
-        serde_json::from_value(sanitized).map_err(|e| CoolifyApiError::Decode(e.to_string()))
+        serde_json::from_value(sanitized)
+            .map_err(|e| CoolifyApiError::Decode(format!("{path}: {e}")))
+    }
+
+    /// List helper tolerant to Coolify shape drift. Real servers return a bare
+    /// array on some versions and a Laravel-style pagination envelope
+    /// (`{"data": [...]}` or `{"data": {"data": [...]}}`) on others. Strict
+    /// `Vec<T>` decoding turns the envelope into an opaque decode error, so
+    /// normalize to an array first and include the path in failures.
+    pub async fn request_list<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Vec<T>, CoolifyApiError> {
+        let value = self.request_value(method, path, body).await?;
+        let items = extract_list_array(&value).ok_or_else(|| {
+            CoolifyApiError::Decode(format!(
+                "{}: expected JSON array or object with data array, got {}",
+                path,
+                value_kind(&value),
+            ))
+        })?;
+        serde_json::from_value(Value::Array(items))
+            .map_err(|e| CoolifyApiError::Decode(format!("{path}: {e}")))
     }
     pub async fn request_text(
         &self,
@@ -300,4 +326,39 @@ async fn read_bounded(mut response: reqwest::Response) -> Result<Vec<u8>, reqwes
         bytes.pop();
     }
     Ok(bytes)
+}
+
+/// Normalize a list response to its items. Accepts a bare array, an object
+/// with a `data` array, or a nested `{"data": {"data": [...]}}` envelope.
+fn extract_list_array(value: &Value) -> Option<Vec<Value>> {
+    match value {
+        Value::Array(items) => Some(items.clone()),
+        Value::Object(map) => {
+            // Try common envelope keys before giving up.
+            for key in ["data", "applications", "servers", "items", "results"] {
+                match map.get(key) {
+                    Some(Value::Array(items)) => return Some(items.clone()),
+                    Some(Value::Object(inner)) => {
+                        if let Some(Value::Array(items)) = inner.get("data") {
+                            return Some(items.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }

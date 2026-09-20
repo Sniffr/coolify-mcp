@@ -73,7 +73,7 @@ impl fmt::Display for CoolifyApiError {
                 }
                 Ok(())
             }
-            Self::Decode(_) => f.write_str("response decode error"),
+            Self::Decode(msg) => write!(f, "response decode error: {msg}"),
         }
     }
 }
@@ -93,7 +93,7 @@ impl fmt::Debug for CoolifyApiError {
                 .field("body", &"[redacted]")
                 .field("retry_after", retry_after)
                 .finish(),
-            Self::Decode(_) => f.debug_tuple("Decode").field(&"[redacted]").finish(),
+            Self::Decode(msg) => f.debug_tuple("Decode").field(msg).finish(),
         }
     }
 }

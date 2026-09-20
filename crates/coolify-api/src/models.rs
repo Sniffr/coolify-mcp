@@ -131,12 +131,14 @@ impl<'de> Deserialize<'de> for ServerSummary {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectSummary {
+    #[serde(default)]
     pub uuid: String,
+    #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ApplicationSummary {
     pub uuid: String,
     pub name: String,
@@ -149,22 +151,56 @@ pub struct ApplicationSummary {
     #[serde(default)]
     pub git_branch: Option<String>,
 }
-fn domain_de<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
-    let v = Option::<Value>::deserialize(d)?;
-    Ok(v.as_ref().and_then(|v| {
-        v.as_str().map(str::to_owned).or_else(|| {
-            v.as_array()
+impl<'de> serde::Deserialize<'de> for ApplicationSummary {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = Value::deserialize(d)?;
+        Ok(Self {
+            uuid: string_field(&v, &["uuid", "id"]),
+            name: string_field(&v, &["name", "title"]),
+            status: v.get("status").and_then(Value::as_str).map(str::to_owned),
+            fqdn: first_string(&v, &["fqdn", "domains"]),
+            git_repository: v
+                .get("git_repository")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            git_branch: v
+                .get("git_branch")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        })
+    }
+}
+/// First present string among candidate keys; numbers coerce to strings so
+/// `{"id": 7}` still yields a usable uuid instead of a decode failure.
+fn string_field(v: &Value, keys: &[&str]) -> String {
+    keys.iter()
+        .filter_map(|k| v.get(*k))
+        .find_map(|val| {
+            val.as_str().map(str::to_owned).or_else(|| {
+                val.as_u64()
+                    .map(|n| n.to_string())
+                    .or_else(|| val.as_i64().map(|n| n.to_string()))
+            })
+        })
+        .unwrap_or_default()
+}
+fn first_string(v: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().filter_map(|k| v.get(*k)).find_map(|val| {
+        val.as_str().map(str::to_owned).or_else(|| {
+            val.as_array()
                 .and_then(|a| a.first())
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         })
-    }))
+    })
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseSummary {
+    #[serde(default)]
     pub uuid: String,
+    #[serde(default)]
     pub name: String,
-    #[serde(rename = "database_type", alias = "type")]
+    #[serde(default, rename = "database_type", alias = "type")]
     pub r#type: String,
     #[serde(default)]
     pub status: Option<String>,
@@ -209,10 +245,13 @@ pub struct ServiceSummary {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeploymentSummary {
+    #[serde(default)]
     pub uuid: String,
+    #[serde(default)]
     pub deployment_uuid: String,
     #[serde(default)]
     pub application_name: Option<String>,
+    #[serde(default)]
     pub status: String,
     #[serde(default)]
     pub created_at: Option<String>,
