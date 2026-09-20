@@ -317,6 +317,31 @@ impl OAuthProvider {
         }
         Ok(out)
     }
+    pub fn revoke_user(&self, user_id: tenant::UserId) -> Result<(), OAuthError> {
+        let mut i = self.inner.lock().unwrap();
+        let previous = i.data.clone();
+        let grant_ids: std::collections::HashSet<String> = i
+            .data
+            .grants
+            .iter()
+            .filter(|(_, grant)| grant.user_id == Some(user_id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &grant_ids {
+            if let Some(grant) = i.data.grants.get_mut(id) {
+                grant.revoked = true;
+            }
+        }
+        for token in i.data.tokens.values_mut() {
+            if grant_ids.contains(&token.grant_id) {
+                token.revoked = true;
+            }
+        }
+        persist(&i).inspect_err(|_| {
+            i.data = previous;
+        })
+    }
+
     pub fn verify_bearer(&self, token: &str, resource: &str) -> Result<String, OAuthError> {
         let token = self.verify_access_token(token, resource)?;
         Ok(token.client_id.clone())

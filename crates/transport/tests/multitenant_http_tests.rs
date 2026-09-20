@@ -655,6 +655,72 @@ async fn missing_or_undecryptable_connection_fails_without_global_fallback() {
 }
 
 #[tokio::test]
+async fn settings_requires_github_session_and_csrf() {
+    let app = router(HttpConfig::for_tests());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/settings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/settings/coolify")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"base_url":"https://coolify.test","access_token":"fixture-settings-token","profile":"read-only"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn settings_html_and_json_never_echo_token() {
+    let directory = private_tempdir();
+    let tenants = Arc::new(
+        TenantStore::open(
+            &directory.path().join("tenant.sqlite"),
+            "fixture-encryption-key-material-that-is-long-enough",
+        )
+        .unwrap(),
+    );
+    let user = tenants.upsert_user("5001", "settings-user").unwrap();
+    let mut config = HttpConfig::for_tests();
+    config.hosted_auth = Some(Arc::new(HostedAuth {
+        tenant: tenants,
+        github: Arc::new(identity::GitHubIdentityProvider::new(
+            "fixture-client".into(),
+            secrecy::SecretString::from("fixture-client-secret"),
+            Url::parse("https://example.test/auth/github/callback").unwrap(),
+            Client::new(),
+        )),
+    }));
+    let app = router(config);
+    let session_cookie = "mcp_session=fixture-session";
+    let _ = user;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/settings")
+                .header("cookie", session_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn user_profile_cannot_be_elevated_by_tool_arguments() {
     let (fixture, base_url, fixture_task) = start_fixture().await;
     let directory = private_tempdir();

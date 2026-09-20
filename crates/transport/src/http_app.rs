@@ -1,12 +1,14 @@
 use crate::http::HttpConfig;
+use crate::settings::{parse_profile, profile_name, settings_html, validate_base_url};
 use axum::{
     Router,
     body::Bytes,
     extract::{ConnectInfo, DefaultBodyLimit, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
-    response::{IntoResponse, Json, Redirect, Response},
+    response::{Html, IntoResponse, Json, Redirect, Response},
     routing::{get, post},
 };
+use coolify_api::{CoolifyClient, CoolifyConfig, TokenSource};
 use mcp_tools::{McpApplication, TenantRequestContext, TenantToolContext, ToolResult};
 use oauth::{AuthorizeRequest, OAuthError, RegistrationRequest, TokenRequest};
 use safety::{AuditEvent, AuditLogger};
@@ -73,7 +75,7 @@ struct GithubContinuation {
 struct BrowserState {
     pending: HashMap<String, PendingAuthorization>,
     github: HashMap<String, GithubContinuation>,
-    sessions: HashMap<String, (UserId, Instant)>,
+    sessions: HashMap<String, (UserId, Instant, String)>,
 }
 
 #[derive(Clone)]
@@ -206,6 +208,12 @@ pub fn router_with_app<A: McpApplication + 'static>(config: HttpConfig, app: A) 
         .route("/oauth/token", post(token))
         .route("/auth/github/start", get(github_start))
         .route("/auth/github/callback", get(github_callback))
+        .route("/settings", get(settings_get))
+        .route(
+            "/settings/coolify",
+            post(settings_save).delete(settings_delete),
+        )
+        .route("/settings/logout", post(settings_logout))
         .route("/mcp", post(mcp).get(mcp_get).delete(mcp_delete))
         .layer(DefaultBodyLimit::max(state.config.max_body_bytes))
         .layer(RequestBodyTimeoutLayer::new(request_timeout))
@@ -408,9 +416,10 @@ async fn github_callback(
         return auth_failure();
     }
     let browser_session = uuid::Uuid::new_v4().to_string();
+    let csrf = uuid::Uuid::new_v4().to_string();
     s.browser.lock().unwrap().sessions.insert(
         browser_session.clone(),
-        (user.id, Instant::now() + s.config.session_ttl),
+        (user.id, Instant::now() + s.config.session_ttl, csrf.clone()),
     );
     let mut response = authorization_redirect(&s, Ok(authorization));
     response.headers_mut().append(
@@ -421,10 +430,219 @@ async fn github_callback(
             s.config.session_ttl.as_secs(),
         ),
     );
+    response.headers_mut().append(
+        "set-cookie",
+        readable_cookie("mcp_csrf", &csrf, s.config.session_ttl.as_secs()),
+    );
     response
         .headers_mut()
         .append("set-cookie", expired_cookie("mcp_github_state"));
     response
+}
+
+#[derive(Deserialize)]
+struct SettingsInput {
+    base_url: Option<String>,
+    access_token: Option<String>,
+    profile: Option<String>,
+    csrf: Option<String>,
+    delete: Option<String>,
+}
+
+fn settings_error(code: StatusCode) -> Response {
+    (code, Json(json!({"error":"settings request rejected"}))).into_response()
+}
+fn settings_json(value: Value) -> Response {
+    (StatusCode::OK, Json(value)).into_response()
+}
+fn csrf_valid(headers: &HeaderMap, expected: &str, supplied: Option<&str>) -> bool {
+    headers
+        .get("x-csrf-token")
+        .and_then(|v| v.to_str().ok())
+        .or(supplied)
+        == Some(expected)
+}
+
+async fn settings_get(State(s): State<AppState>, headers: HeaderMap) -> Response {
+    let Some((user_id, csrf)) = browser_session(&s, &headers) else {
+        return settings_error(StatusCode::UNAUTHORIZED);
+    };
+    let connection = s
+        .config
+        .hosted_auth
+        .as_ref()
+        .and_then(|h| h.tenant.load_connection(user_id).ok().flatten());
+    let (host, profile) = connection
+        .as_ref()
+        .map(|c| (c.base_url.host_str().unwrap_or(""), Some(c.profile)))
+        .unwrap_or(("", None));
+    if headers
+        .get("accept")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("application/json"))
+    {
+        return settings_json(
+            json!({"host":host,"configured":!host.is_empty(),"profile":profile.map(profile_name).unwrap_or("read-only"),"last_validated_at":Value::Null}),
+        );
+    }
+    Html(settings_html(Some(host), profile, &csrf)).into_response()
+}
+
+async fn settings_save(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let Some((user_id, expected_csrf)) = browser_session(&s, &headers) else {
+        return settings_error(StatusCode::UNAUTHORIZED);
+    };
+    let input: SettingsInput = if headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("application/x-www-form-urlencoded"))
+    {
+        serde_urlencoded::from_bytes(&body).unwrap_or(SettingsInput {
+            base_url: None,
+            access_token: None,
+            profile: None,
+            csrf: None,
+            delete: None,
+        })
+    } else {
+        serde_json::from_slice(&body).unwrap_or(SettingsInput {
+            base_url: None,
+            access_token: None,
+            profile: None,
+            csrf: None,
+            delete: None,
+        })
+    };
+    if !csrf_valid(&headers, &expected_csrf, input.csrf.as_deref()) {
+        return settings_error(StatusCode::FORBIDDEN);
+    }
+    if input.delete.as_deref() == Some("true") {
+        return settings_delete_inner(&s, user_id);
+    }
+    let (Some(raw_url), Some(token), Some(profile_raw)) =
+        (input.base_url, input.access_token, input.profile)
+    else {
+        return settings_error(StatusCode::BAD_REQUEST);
+    };
+    let Some(profile) = parse_profile(&profile_raw) else {
+        return settings_error(StatusCode::BAD_REQUEST);
+    };
+    let Ok(base_url) = validate_base_url(&raw_url) else {
+        return settings_error(StatusCode::BAD_REQUEST);
+    };
+    if token.is_empty() || token.len() > 4096 {
+        return settings_error(StatusCode::BAD_REQUEST);
+    }
+    let Some(hosted) = &s.config.hosted_auth else {
+        return settings_error(StatusCode::SERVICE_UNAVAILABLE);
+    };
+    let secret = secrecy::SecretString::from(token);
+    if hosted
+        .tenant
+        .save_connection(user_id, &base_url, &secret, profile)
+        .is_err()
+    {
+        return settings_error(StatusCode::BAD_REQUEST);
+    }
+    let mut env = std::collections::HashMap::new();
+    env.insert(
+        "COOLIFY_ACCESS_TOKEN".to_owned(),
+        secret.expose_secret().to_owned(),
+    );
+    let Ok(token_source) = TokenSource::from_env(&env) else {
+        return settings_error(StatusCode::BAD_REQUEST);
+    };
+    let Ok(client) = CoolifyClient::new(CoolifyConfig {
+        base_url: base_url.clone(),
+        token_source,
+        custom_headers: Default::default(),
+        timeout: Duration::from_secs(10),
+    }) else {
+        return settings_error(StatusCode::BAD_REQUEST);
+    };
+    let Ok(probe) = client.probe_get("version").await else {
+        return settings_error(StatusCode::BAD_GATEWAY);
+    };
+    if probe.status >= 400 {
+        return settings_error(StatusCode::BAD_GATEWAY);
+    }
+    let value = json!({"host":base_url.host_str().unwrap_or(""),"configured":true,"profile":profile_name(profile),"last_validated_at":unix_timestamp()});
+    if headers
+        .get("accept")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("application/json"))
+    {
+        settings_json(value)
+    } else {
+        Redirect::to("/settings").into_response()
+    }
+}
+
+fn settings_delete_inner(s: &AppState, user_id: UserId) -> Response {
+    let Some(hosted) = &s.config.hosted_auth else {
+        return settings_error(StatusCode::SERVICE_UNAVAILABLE);
+    };
+    if hosted.tenant.delete_connection(user_id).is_err()
+        || hosted.tenant.revoke_user_grants(user_id).is_err()
+        || s.config.oauth.revoke_user(user_id).is_err()
+    {
+        return settings_error(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    settings_json(json!({"configured":false}))
+}
+async fn settings_delete(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let Some((user_id, expected_csrf)) = browser_session(&s, &headers) else {
+        return settings_error(StatusCode::UNAUTHORIZED);
+    };
+    let supplied = headers
+        .get("x-csrf-token")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+        .or_else(|| {
+            serde_json::from_slice::<SettingsInput>(&body)
+                .ok()
+                .and_then(|v| v.csrf)
+        });
+    if !csrf_valid(&headers, &expected_csrf, supplied.as_deref()) {
+        return settings_error(StatusCode::FORBIDDEN);
+    }
+    settings_delete_inner(&s, user_id)
+}
+async fn settings_logout(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let Some((user_id, expected_csrf)) = browser_session(&s, &headers) else {
+        return settings_error(StatusCode::UNAUTHORIZED);
+    };
+    let supplied = headers
+        .get("x-csrf-token")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+        .or_else(|| {
+            serde_json::from_slice::<SettingsInput>(&body)
+                .ok()
+                .and_then(|v| v.csrf)
+        });
+    if !csrf_valid(&headers, &expected_csrf, supplied.as_deref()) {
+        return settings_error(StatusCode::FORBIDDEN);
+    }
+    if let Some(session) = cookie(&headers, "mcp_session") {
+        s.browser.lock().unwrap().sessions.remove(&session);
+    }
+    let _ = user_id;
+    let mut response = Json(json!({"logged_out":true})).into_response();
+    response
+        .headers_mut()
+        .append("set-cookie", expired_cookie("mcp_session"));
+    response
+        .headers_mut()
+        .append("set-cookie", expired_cookie("mcp_csrf"));
+    response
+}
+
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
 
 fn cleanup_browser(s: &AppState) {
@@ -438,7 +656,7 @@ fn cleanup_browser(s: &AppState) {
         .retain(|_, continuation| continuation.expires_at > now);
     browser
         .sessions
-        .retain(|_, (_, expires_at)| *expires_at > now);
+        .retain(|_, (_, expires_at, _)| *expires_at > now);
 }
 
 fn browser_user(s: &AppState, headers: &HeaderMap) -> Option<UserId> {
@@ -449,7 +667,18 @@ fn browser_user(s: &AppState, headers: &HeaderMap) -> Option<UserId> {
         .unwrap()
         .sessions
         .get(&session)
-        .map(|(user_id, _)| *user_id)
+        .map(|(user_id, _, _)| *user_id)
+}
+
+fn browser_session(s: &AppState, headers: &HeaderMap) -> Option<(UserId, String)> {
+    let session = cookie(headers, "mcp_session")?;
+    cleanup_browser(s);
+    s.browser
+        .lock()
+        .unwrap()
+        .sessions
+        .get(&session)
+        .map(|(user_id, _, csrf)| (*user_id, csrf.clone()))
 }
 
 fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -467,6 +696,13 @@ fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
 fn secure_cookie(name: &str, value: &str, max_age: u64) -> HeaderValue {
     HeaderValue::from_str(&format!(
         "{name}={value}; Max-Age={max_age}; Path=/; Secure; HttpOnly; SameSite=Lax"
+    ))
+    .expect("cookie values are generated from safe identifiers")
+}
+
+fn readable_cookie(name: &str, value: &str, max_age: u64) -> HeaderValue {
+    HeaderValue::from_str(&format!(
+        "{name}={value}; Max-Age={max_age}; Path=/; Secure; SameSite=Lax"
     ))
     .expect("cookie values are generated from safe identifiers")
 }
